@@ -6,7 +6,7 @@ Outputs: List of chunk text strings.
 Dependencies: langchain
 """
 
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 # Fixed splitter — do NOT change chunk_size or chunk_overlap per guidelines.md
 _SPLITTER = RecursiveCharacterTextSplitter(
     chunk_size=400,
