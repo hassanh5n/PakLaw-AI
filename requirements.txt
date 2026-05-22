@@ -5,6 +5,7 @@ PyMuPDF              # PDF text extraction (import as 'fitz')
 # Text Processing & Chunking 
 langchain             # RecursiveCharacterTextSplitter
 langchain-community   # LangChain community integrations
+langchain-text-splitters
 
 # Embeddings & Semantic Search 
 sentence-transformers # all-MiniLM-L6-v2 + cross-encoder
