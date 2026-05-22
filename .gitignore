@@ -1,0 +1,22 @@
+# Environment
+.env
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+env/
+
+# Data & indexes (large binary files — don't commit)
+data/public/*.pdf
+data/firms/
+indexes/
+
+# Streamlit cache
+.streamlit/
+
+# Reports
+report/*.pdf
+
+# OS
+.DS_Store
+Thumbs.db
