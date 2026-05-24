@@ -27,6 +27,7 @@ _DOMAIN_MAP = {
 
 
 def _detect_domain(filename: str) -> str:
+    """Infer a coarse law domain from the source filename."""
     lower = filename.lower()
     for keyword, domain in _DOMAIN_MAP.items():
         if keyword in lower:
@@ -35,6 +36,7 @@ def _detect_domain(filename: str) -> str:
 
 
 def _detect_section_hint(chunk_text: str) -> str | None:
+    """Extract a leading article/section hint from the chunk text when present."""
     # Match patterns like "Article 25", "Section 302", "Art. 4", "Sec. 17"
     pattern = r'(?i)^(article|section|art\.|sec\.)\s*(\d+[A-Z]?)'
     match = re.search(pattern, chunk_text.strip())
@@ -44,6 +46,7 @@ def _detect_section_hint(chunk_text: str) -> str | None:
 
 
 def _make_chunk_id(source_doc: str, position: int) -> str:
+    """Create a short stable identifier for a chunk within a source document."""
     raw = f"{source_doc}::{position}"
     return hashlib.sha256(raw.encode()).hexdigest()[:8]
 
@@ -54,6 +57,7 @@ def tag_chunks(
     firm_id: str | None = None,
     access_level: str = "public",
 ) -> list[dict]:
+    """Attach source, access, and chunk metadata to each chunk string."""
     domain = _detect_domain(source_doc)
     tagged = []
 

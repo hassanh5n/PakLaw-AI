@@ -10,6 +10,7 @@ import fitz
 
 
 def extract_text_from_pdf(pdf_path: str) -> list[tuple[int, str]]:
+    """Extract non-empty page text from a PDF as (page_number, text) tuples."""
     pages = []
     doc = fitz.open(pdf_path)
 
@@ -26,6 +27,7 @@ def extract_text_from_pdf(pdf_path: str) -> list[tuple[int, str]]:
 
 
 def is_text_extractable(pdf_path: str) -> bool:
+    """Return True when at least 10% of the PDF pages contain meaningful text."""
     doc = fitz.open(pdf_path)
     total_pages = len(doc)
     text_pages = 0

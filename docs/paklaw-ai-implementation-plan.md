@@ -141,11 +141,11 @@ PakLaw AI is a recall-critical, dual-layer legal retrieval system for Pakistani 
 
 - **T8.1** — Write 25–30 test questions covering all law domains (constitutional, criminal, civil, family, private)
 - **T8.2** — For each question, manually identify the ground-truth section/article that should be retrieved
-- **T8.3** — Run all questions through PakLaw AI; record top-10 chunks returned
-- **T8.4** — Run same questions through BM25-only baseline (no semantic, no re-ranking)
+- **T8.3** — Use a repeatable evaluation script to run all questions through PakLaw AI and record top-10 chunks returned
+- **T8.4** — Run the same questions through a BM25-only baseline (no semantic search, no re-ranking)
 - **T8.5** — Compute **Precision@K** (K = 1, 5, 10) for both systems
 - **T8.6** — Compute **MRR** (Mean Reciprocal Rank) for both systems
-- **T8.7** — Build improvement comparison table: Baseline vs PakLaw AI
+- **T8.7** — Build an improvement comparison table: Baseline vs PakLaw AI
 
 **Exit Criteria:** Improvement table complete; PakLaw AI shows measurable recall gain over BM25 baseline.
 
@@ -168,10 +168,27 @@ PakLaw AI is a recall-critical, dual-layer legal retrieval system for Pakistani 
 
 ---
 
+## Phase 10 — Packaging & Operational Readiness
+
+**Goal:** Verify the repository can be built, checked, and handed off from a clean clone without guesswork.
+
+### Tasks
+
+- **T10.1** — Compile `report/report.md` into `report/report.pdf`
+- **T10.2** — Run a readiness check that reports missing artifacts and optional dependencies
+- **T10.3** — Verify the public corpus indexes exist and are non-empty after ingestion
+- **T10.4** — Smoke-test the app startup path and missing-index warning paths
+- **T10.5** — Capture a final status snapshot of implemented vs. outstanding items
+- **T10.6** — Keep the evaluation runner and baseline output files in sync with the question bank
+
+**Exit Criteria:** Report PDF exists, readiness check is explicit, and the project has a reproducible final verification step.
+
+---
+
 ## Dependency Order (Build Sequence)
 
 ```
-T1 → T2 → T3 → T4 → T5 → T6 → T7 → T8 → T9
+T1 → T2 → T3 → T4 → T5 → T6 → T7 → T8 → T9 → T10
               ↑
          (T3 can run in parallel with T4 after T2 is done)
 ```

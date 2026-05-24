@@ -10,6 +10,7 @@ import re
 
 
 def clean_text(raw_text: str) -> str:
+    """Normalize extracted PDF text by removing common legal-PDF noise patterns."""
     text = raw_text
 
     # Remove standalone page numbers (e.g. "- 12 -", "Page 12", "12\n")

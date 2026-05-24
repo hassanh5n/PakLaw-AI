@@ -8,15 +8,18 @@ Dependencies: sentence-transformers, faiss-cpu, numpy, pickle
 
 import os
 import pickle
+import json
 
 import faiss
 import numpy as np
-from sentence_transformers import SentenceTransformer
-from tqdm import tqdm
+from vector_backends import EMBEDDING_DIM, get_embedding_backend
 
-# Load the embedding model once at module level to avoid reloading on every call
-_MODEL = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-_EMBEDDING_DIM = 384  # Fixed output dimension for all-MiniLM-L6-v2
+
+def _normalize_embeddings(embeddings: np.ndarray) -> np.ndarray:
+    """Normalize vectors so IndexFlatIP behaves like cosine similarity."""
+    lengths = np.linalg.norm(embeddings, axis=1, keepdims=True)
+    lengths[lengths == 0.0] = 1.0
+    return embeddings / lengths
 
 
 def build_faiss_index(
@@ -24,23 +27,24 @@ def build_faiss_index(
     output_dir: str,
     index_name: str,
 ) -> None:
+    """Embed chunks, build a FAISS inner-product index, and persist chunk metadata."""
     os.makedirs(output_dir, exist_ok=True)
 
     texts = [chunk["text"] for chunk in chunks]
 
     print(f"Embedding {len(texts)} chunks...")
-    # Encode in batches; normalize=True ensures vectors are unit-length,
-    # which makes IndexFlatIP equivalent to cosine similarity
-    embeddings = _MODEL.encode(
-        texts,
-        batch_size=64,
-        show_progress_bar=True,
-        normalize_embeddings=True,
-    )
-    embeddings = np.array(embeddings, dtype="float32")
+    model = get_embedding_backend()
+
+    try:
+        embeddings = model.encode(texts, batch_size=64, show_progress_bar=True, normalize_embeddings=True)
+    except TypeError:
+        embeddings = model.encode(texts)
+
+    embeddings = np.asarray(embeddings, dtype="float32")
+    embeddings = _normalize_embeddings(embeddings)
 
     # Build FAISS index — IndexFlatIP performs exact inner-product search
-    index = faiss.IndexFlatIP(_EMBEDDING_DIM)
+    index = faiss.IndexFlatIP(EMBEDDING_DIM)
     index.add(embeddings)
 
     # Save FAISS index
@@ -54,3 +58,9 @@ def build_faiss_index(
     with open(chunks_path, "wb") as f:
         pickle.dump(chunks, f)
     print(f"Saved chunks     → {chunks_path}  ({len(chunks)} chunks)")
+
+    backend_name = getattr(model, "backend_name", model.__class__.__name__)
+    backend_path = os.path.join(output_dir, f"{index_name}_backend.json")
+    with open(backend_path, "w", encoding="utf-8") as f:
+        json.dump({"embedding_backend": backend_name}, f, indent=2)
+    print(f"Saved backend    → {backend_path}  ({backend_name})")

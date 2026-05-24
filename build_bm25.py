@@ -13,6 +13,7 @@ from rank_bm25 import BM25Okapi
 
 
 def build_bm25_index(chunks_pkl_path: str, output_dir: str, index_name: str) -> None:
+    """Build and persist a BM25 index from the chunk metadata stored in chunks.pkl."""
     # Load chunk dicts produced by index_builder.py
     with open(chunks_pkl_path, "rb") as f:
         chunks = pickle.load(f)
