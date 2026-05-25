@@ -8,8 +8,10 @@ Dependencies: faiss-cpu, rank-bm25, sentence-transformers, query_expander
 
 from __future__ import annotations
 
+import json
 import os
 import pickle
+import re
 from typing import Iterable
 from functools import lru_cache
 
@@ -33,17 +35,154 @@ try:
 except Exception:
 	pass
 
-from query_expander import expand_query
-
 
 PUBLIC_INDEX_NAME = "pakistan_law_public"
 FIRM_INDEX_PREFIX = "firm_"
 DEFAULT_INDEX_ROOT = "indexes"
-FAISS_TOP_K = 15
-BM25_TOP_K = 15
-RERANK_TOP_K = 10
+FAISS_TOP_K = 25
+BM25_TOP_K = 25
+RERANK_TOP_K = 12
+QUERY_VARIANT_LIMIT = 6
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 RERANKER_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+
+# Relevance scoring weights and thresholds
+MIN_RERANK_SCORE = 0.1
+PUBLIC_MIN_RERANK_SCORE = 0.25
+
+# Weights for composing a per-chunk relevance score from available signals.
+REL_WEIGHT_RERANK = 0.6
+REL_WEIGHT_FAISS = 0.25
+REL_WEIGHT_BM25 = 0.15
+
+# Final cutoffs (0..1) for dropping irrelevant hits or marking low-confidence
+IRRELEVANCE_CUTOFF = 0.12
+LOW_CONF_CUTOFF = 0.30
+
+_LEGAL_STOPWORDS = {
+	"a",
+	"an",
+	"and",
+	"are",
+	"as",
+	"be",
+	"by",
+	"for",
+	"from",
+	"how",
+	"in",
+	"into",
+	"is",
+	"it",
+	"of",
+	"on",
+	"or",
+	"that",
+	"the",
+	"their",
+	"to",
+	"under",
+	"what",
+	"when",
+	"which",
+	"who",
+	"with",
+	"without",
+}
+
+
+def _dedupe_preserve_order(items: Iterable[str]) -> list[str]:
+	seen: set[str] = set()
+	deduped: list[str] = []
+
+	for item in items:
+		candidate = item.strip()
+		if not candidate:
+			continue
+		key = candidate.casefold()
+		if key in seen:
+			continue
+		seen.add(key)
+		deduped.append(candidate)
+
+	return deduped
+
+
+def _normalize_query_text(query: str) -> str:
+	"""Normalize a query into a cleaner lexical search string."""
+
+	cleaned = re.sub(r"[^\w\s]", " ", query.lower())
+	return " ".join(cleaned.split())
+
+
+def _strip_stopwords(query: str) -> str:
+	"""Drop common filler words to create a recall-friendly variant."""
+
+	tokens = [token for token in _normalize_query_text(query).split() if token not in _LEGAL_STOPWORDS]
+	return " ".join(tokens)
+
+
+def expand_query(
+	query: str,
+	api_key: str | None = None,
+	model: str = "llama-3.1-8b-instant",
+) -> list[str]:
+	"""Expand a query into the original text plus model-provided alternate phrasings."""
+
+	cleaned_query = query.strip()
+	if not cleaned_query:
+		return []
+
+	resolved_api_key = api_key or os.getenv("GROQ_API_KEY")
+	if not resolved_api_key:
+		return [cleaned_query]
+
+	try:
+		from groq import Groq
+
+		client = Groq(api_key=resolved_api_key)
+		response = client.chat.completions.create(
+			model=model,
+			temperature=0.2,
+			messages=[
+				{
+					"role": "system",
+					"content": (
+						"You rewrite legal research queries for Pakistani law search. "
+						"Return exactly three alternative phrasings of the user's query. "
+						"Do not answer the question, do not add explanations, and keep meaning unchanged. "
+						"Return only a JSON array of three strings."
+					),
+				},
+				{"role": "user", "content": cleaned_query},
+			],
+		)
+		raw_text = response.choices[0].message.content or ""
+		parsed = json.loads(raw_text)
+		if not isinstance(parsed, list):
+			return [cleaned_query]
+		variants = [str(item) for item in parsed if str(item).strip()]
+		return _dedupe_preserve_order([cleaned_query, *variants])[:QUERY_VARIANT_LIMIT]
+	except Exception:
+		return [cleaned_query]
+
+
+def _build_query_variants(query: str, expand: bool = True) -> list[str]:
+	"""Create a small set of high-recall query variants for retrieval."""
+
+	variants = [query.strip()]
+	normalized = _normalize_query_text(query)
+	if normalized and normalized not in variants:
+		variants.append(normalized)
+
+	compressed = _strip_stopwords(query)
+	if compressed and compressed not in variants:
+		variants.append(compressed)
+
+	if expand:
+		variants.extend(expand_query(query))
+
+	return _dedupe_preserve_order(variants)[:QUERY_VARIANT_LIMIT]
 
 
 @lru_cache(maxsize=1)
@@ -292,6 +431,66 @@ def _rerank_candidates(query: str, candidates: list[dict], top_k: int = RERANK_T
 	return ranked[:top_k]
 
 
+def _filter_by_relevance(ranked: list[dict]) -> list[dict]:
+	"""Filter reranked candidates by configured relevance thresholds.
+
+	This prevents returning low-confidence public documents for queries
+	that the reranker judges as unrelated.
+	"""
+	if not ranked:
+		return []
+
+	# Gather raw signals
+	rerank_scores = [float(r.get("rerank_score") or 0.0) for r in ranked]
+	faiss_scores = [float(r.get("faiss_score") or 0.0) for r in ranked]
+	bm25_scores = [float(r.get("bm25_score") or 0.0) for r in ranked]
+
+	# Normalize each signal to 0..1 across the ranked list to make them comparable.
+	def _normalize(values: list[float]) -> list[float]:
+		mx = max(values) if values else 0.0
+		mn = min(values) if values else 0.0
+		span = mx - mn if mx - mn > 1e-9 else 1.0
+		return [(v - mn) / span for v in values]
+
+	norm_rerank = _normalize(rerank_scores)
+	norm_faiss = _normalize(faiss_scores)
+	norm_bm25 = _normalize(bm25_scores)
+
+	filtered: list[dict] = []
+	for i, rec in enumerate(ranked):
+		# Compose a relevance score
+		rel = (
+			REL_WEIGHT_RERANK * norm_rerank[i]
+			+ REL_WEIGHT_FAISS * norm_faiss[i]
+			+ REL_WEIGHT_BM25 * norm_bm25[i]
+		)
+
+		# Attach the computed relevance for UI and downstream logic
+		rec = dict(rec)
+		rec["relevance_score"] = float(max(0.0, min(rel, 1.0)))
+
+		# Determine whether to accept, mark low-confidence, or drop
+		if rec.get("corpus") == "public":
+			# require slightly higher relevance to show public sources
+			cutoff = PUBLIC_MIN_RERANK_SCORE * 0.9
+		else:
+			cutoff = MIN_RERANK_SCORE * 0.9
+
+		# Drop truly irrelevant results
+		if rec["relevance_score"] < IRRELEVANCE_CUTOFF:
+			continue
+
+		# Mark low confidence if below threshold
+		if rec["relevance_score"] < LOW_CONF_CUTOFF:
+			rec["low_confidence"] = True
+
+		filtered.append(rec)
+
+	# Sort by the computed relevance_score descending
+	filtered.sort(key=lambda r: r.get("relevance_score", 0.0), reverse=True)
+	return filtered
+
+
 def get_accessible_corpora(role: str, firm_id: str | None = None) -> list[str]:
 	"""
 	Return the corpora a user role may search.
@@ -339,7 +538,7 @@ def retrieve_chunks(
 	if not cleaned_query:
 		return []
 
-	query_variants = expand_query(cleaned_query) if expand else [cleaned_query]
+	query_variants = _build_query_variants(cleaned_query, expand=expand)
 	if not query_variants:
 		query_variants = [cleaned_query]
 
@@ -352,7 +551,41 @@ def retrieve_chunks(
 
 	merged_candidates = _dedupe_by_chunk_id(all_candidates)
 	filtered_candidates = _apply_access_filter(merged_candidates, role, firm_id)
-	return _rerank_candidates(cleaned_query, filtered_candidates, top_k=top_k)
+
+	# Rerank and then filter by configured relevance thresholds to avoid returning
+	# low-confidence public documents for irrelevant queries.
+	reranked = _rerank_candidates(cleaned_query, filtered_candidates, top_k=max(top_k, RERANK_TOP_K))
+	relevant = _filter_by_relevance(reranked)
+
+	# If enough relevant results passed thresholds, return them.
+	if relevant:
+		return relevant[:top_k]
+
+	# If the user can access firm results, try firm-only candidates first.
+	if role.lower() in {"user", "admin"} and firm_id:
+		firm_candidates = [c for c in filtered_candidates if c.get("corpus") == "firm"]
+		if firm_candidates:
+			firer = _rerank_candidates(cleaned_query, firm_candidates, top_k=top_k)
+			firm_relevant = _filter_by_relevance(firer)
+			if firm_relevant:
+				return firm_relevant[:top_k]
+			# Fall back to firm reranked hits but mark as low confidence
+			low_conf_firm: list[dict] = []
+			for rec in firer[:top_k]:
+				copy = dict(rec)
+				copy["low_confidence"] = True
+				copy["note"] = "Low-confidence firm match (below relevance thresholds)"
+				low_conf_firm.append(copy)
+			return low_conf_firm
+
+	# As a last resort, return top reranked candidates but mark them low-confidence
+	low_conf: list[dict] = []
+	for rec in reranked[:top_k]:
+		copy = dict(rec)
+		copy["low_confidence"] = True
+		copy["note"] = "Low-confidence match (below relevance thresholds)"
+		low_conf.append(copy)
+	return low_conf
 
 
 def retrieve_bm25_only(
@@ -382,7 +615,7 @@ def retrieve_bm25_only(
 	if not cleaned_query:
 		return []
 
-	query_variants = expand_query(cleaned_query) if expand else [cleaned_query]
+	query_variants = _build_query_variants(cleaned_query, expand=expand)
 	if not query_variants:
 		query_variants = [cleaned_query]
 

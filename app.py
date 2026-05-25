@@ -9,10 +9,9 @@ Dependencies: streamlit, retriever, generator, access_control
 from __future__ import annotations
 
 import os
-import pickle
 import threading
-from datetime import datetime
 from pathlib import Path
+from datetime import datetime
 
 import streamlit as st
 
@@ -21,9 +20,8 @@ from access_control import (
 	UserRecord,
 	authenticate_user,
 	ensure_default_users,
-	route_user_access,
 )
-from generator import generate_answer
+from generator import generate_answer, MIN_RETRIEVED_CHUNKS_FOR_CONFIDENT_ANSWER
 from retriever import retrieve_chunks
 
 
@@ -36,6 +34,18 @@ COMBINED_CORPUS_LABEL = "combined"
 _RETRIEVAL_WARMUP_STARTED = False
 _RETRIEVAL_BACKEND_READY = False
 _RETRIEVAL_BACKEND_ERROR: str | None = None
+
+
+@st.fragment(run_every=1)
+def _render_retrieval_status() -> None:
+	"""Keep the page in sync with background retrieval warmup."""
+
+	if _RETRIEVAL_BACKEND_READY and not st.session_state.get("retrieval_ready_synced"):
+		st.session_state.retrieval_ready_synced = True
+		st.rerun()
+
+	if not _RETRIEVAL_BACKEND_READY:
+		st.info(_retrieval_backend_status_message())
 
 
 def _warm_retrieval_backends() -> None:
@@ -122,21 +132,194 @@ def _format_result_cards(results: list[dict]) -> None:
 		return
 
 	for index, result in enumerate(results, start=1):
-		with st.container(border=True):
-			st.markdown(f"**{index}. {result.get('source_doc', 'Unknown source')}**")
-			st.caption(
-				f"Corpus: {result.get('corpus', 'unknown')} | Role access: {result.get('access_level', 'unknown')} | "
-				f"Section: {result.get('section_hint') or 'N/A'} | Score: {result.get('combined_score', 0.0):.4f}"
-			)
-			st.write(result.get("text", ""))
+		rerank_score = result.get("rerank_score")
+		faiss_score = result.get("faiss_score")
+		bm25_score = result.get("bm25_score")
+
+		# Compact header with source and quick metadata
+		header = f"{index}. {result.get('source_doc', 'Unknown source')}"
+		subtitle = (
+			f"Corpus: {result.get('corpus', 'unknown')} | Access: {result.get('access_level', 'unknown')} | "
+			f"Domain: {result.get('law_domain', 'unknown')} | Section: {result.get('section_hint') or 'N/A'}"
+		)
+
+		with st.expander(header, expanded=(index == 1)):
+			# Header row: subtitle left, evidence badge right
+			left_col, right_col = st.columns([9, 1])
+			with left_col:
+				st.caption(subtitle)
+			with right_col:
+				# Compute evidence strength for this source using computed relevance_score when available
+				score = float(result.get("relevance_score") or result.get("rerank_score") or result.get("combined_score") or 0.0)
+				if result.get("low_confidence"):
+					badge_label = "Low"
+					badge_color = "#e74c3c"
+				elif score >= 0.75:
+					badge_label = "Strong"
+					badge_color = "#2ecc71"
+				elif score >= 0.45:
+					badge_label = "Moderate"
+					badge_color = "#f39c12"
+				else:
+					badge_label = "Weak"
+					badge_color = "#e74c3c"
+				badge_html = f"<div style='background:{badge_color};color:white;padding:6px;border-radius:6px;text-align:center;font-weight:600'>{badge_label}</div>"
+				st.markdown(badge_html, unsafe_allow_html=True)
+
+			# Show truncated chunk text, with optional full view
+			full_text = str(result.get("text", ""))
+			preview = full_text if len(full_text) <= 400 else full_text[:400].rstrip() + "..."
+			st.write(preview)
+			if len(full_text) > 400:
+				with st.expander("Show full chunk", expanded=False):
+					st.write(full_text)
+
+			# Why this candidate: retrieval method + scores
+			parts = []
+			parts.append(f"Method: {result.get('retrieval_method', 'unknown')}")
+			parts.append(f"Combined: {result.get('combined_score', 0.0):.4f}")
+			if isinstance(rerank_score, (int, float)):
+				parts.append(f"Rerank: {float(rerank_score):.4f}")
+			if isinstance(faiss_score, (int, float)):
+				parts.append(f"FAISS: {float(faiss_score):.4f}")
+			if isinstance(bm25_score, (int, float)):
+				parts.append(f"BM25: {float(bm25_score):.4f}")
+
+			st.markdown("**Why this result matched:**")
+			st.caption(" | ".join(parts))
+
+			# For public corpus results we avoid showing full metadata by default
+			if result.get("corpus") == "public":
+				st.caption("Public source")
+			else:
+				# Reveal raw metadata for debugging and provenance for non-public results
+				with st.expander("Inspect metadata", expanded=False):
+					import json
+
+					meta = dict(result)
+					# Hide very long text in metadata view
+					text_blob = meta.pop("text", None)
+					st.code(json.dumps(meta, indent=2), language="json")
+
+					# Source actions are explicit: user must check to enable download/read
+					show_actions = st.checkbox("Show source actions (download, open)", key=f"show_actions_{index}")
+					if show_actions:
+						source_doc = result.get("source_doc")
+						firm_id = result.get("firm_id")
+						pdf_path = None
+						if source_doc:
+							public_path = Path("data") / "public" / source_doc
+							if public_path.exists():
+								pdf_path = public_path
+							elif firm_id:
+								firm_path = Path("data") / "firms" / firm_id / source_doc
+								if firm_path.exists():
+									pdf_path = firm_path
+
+						if pdf_path is not None and pdf_path.exists():
+							try:
+								with open(pdf_path, "rb") as f:
+									pdf_bytes = f.read()
+								st.download_button("Download source PDF", pdf_bytes, file_name=source_doc)
+							except Exception as exc:
+								st.caption(f"Could not open source file for download: {exc}")
+						else:
+							st.caption("No original PDF available for this source.")
 
 
 def _render_answer_block(answer: str) -> None:
 	st.markdown("### Answer")
 	if answer:
 		st.write(answer)
+
+		# Also show confidence beside the answer and warn if any returned chunk is low-confidence
+		corpus_label = st.session_state.get("last_active_corpus")
+		if corpus_label == PUBLIC_CORPUS_LABEL:
+			chunks = st.session_state.get("last_public_results", [])
+		elif corpus_label == FIRM_CORPUS_LABEL:
+			chunks = st.session_state.get("last_firm_results", [])
+		else:
+			chunks = st.session_state.get("last_combined_results", [])
+
+		# Compute confidence similarly to retrieval summary
+		if chunks:
+			top_score = max((r.get("rerank_score") or r.get("combined_score") or 0.0) for r in chunks)
+			evidence_saturation = min(len(chunks) / max(MIN_RETRIEVED_CHUNKS_FOR_CONFIDENT_ANSWER, 1), 1.0)
+			raw_confidence = (0.7 * max(min(top_score, 1.0), 0.0)) + (0.3 * evidence_saturation)
+			confidence_pct = int(round(raw_confidence * 100))
+			# Show a colored badge next to the answer with confidence
+			if raw_confidence >= 0.75:
+				badge_color = "#2ecc71"  # green
+			elif raw_confidence >= 0.45:
+				badge_color = "#f39c12"  # orange
+			else:
+				badge_color = "#e74c3c"  # red
+
+			col_left, col_right = st.columns([6, 1])
+			with col_left:
+				st.write("")
+			with col_right:
+				badge_html = f"<div style='background:{badge_color};color:white;padding:6px;border-radius:6px;text-align:center;font-weight:bold'>{confidence_pct}%</div>"
+				st.markdown(badge_html, unsafe_allow_html=True)
+
+			# Visible warning if any chunk was flagged low-confidence
+			if any(c.get("low_confidence") for c in chunks):
+				st.warning("Some retrieved sources are low-confidence — verify citations before relying on this answer.")
+
+		# Show compact professional citations (top unique documents)
+		if chunks:
+			seen = set()
+			citations = []
+			for c in chunks:
+				src = c.get("source_doc")
+				if not src or src in seen:
+					continue
+				seen.add(src)
+				section = c.get("section_hint") or ""
+				firm = c.get("firm_id") or "public"
+				citations.append(f"{src} — {section} ({firm})" if section else f"{src} ({firm})")
+
+			if citations:
+				st.markdown("**Cited sources:**")
+				for cite in citations[:8]:
+					st.write(f"- {cite}")
 	else:
 		st.info("No answer was generated.")
+
+
+def _render_retrieval_summary(results: list[dict]) -> None:
+	"""Show a compact retrieval summary and an evidence strength badge."""
+	if not results:
+		st.caption("No retrieved evidence.")
+		return
+
+	count = len(results)
+	# Determine top score using rerank_score when available
+	top_score = max((r.get("rerank_score") or r.get("combined_score") or 0.0) for r in results)
+
+	# Blend retrieval score and evidence count into a single confidence percentage.
+	# Weight: 70% retrieval top score, 30% evidence saturation (relative to ideal chunk count).
+	evidence_saturation = min(count / max(MIN_RETRIEVED_CHUNKS_FOR_CONFIDENT_ANSWER, 1), 1.0)
+	raw_confidence = (0.7 * max(min(top_score, 1.0), 0.0)) + (0.3 * evidence_saturation)
+	confidence_pct = int(round(raw_confidence * 100))
+
+	# Friendly label
+	if raw_confidence >= 0.75:
+		strength = "High evidence"
+		color = "green"
+	elif raw_confidence >= 0.45:
+		strength = "Moderate evidence"
+		color = "orange"
+	else:
+		strength = "Low evidence"
+		color = "red"
+
+	left, right = st.columns([3, 1])
+	with left:
+		st.markdown(f"**Retrieved:** {count} chunk(s) — **{strength}**")
+	with right:
+		st.metric("Confidence", f"{confidence_pct}%")
+		st.progress(confidence_pct)
 
 
 def _generate_answer_safe(query: str, chunks: list[dict]) -> str:
@@ -169,26 +352,6 @@ def _safe_retrieve(retrieve_fn, query: str, empty_message: str, **kwargs) -> lis
 		return []
 
 
-def _load_chunk_library(index_root: str = "indexes") -> list[dict]:
-	user = _get_user_dict()
-	if not user:
-		return []
-
-	routing = route_user_access(user, index_root=index_root)
-	collections: list[dict] = []
-
-	for path in routing["index_paths"]:
-		chunks_files = list(Path(path).glob("*_chunks.pkl"))
-		for chunks_file in chunks_files:
-			try:
-				with open(chunks_file, "rb") as handle:
-					collections.extend(pickle.load(handle))
-			except Exception:
-				continue
-
-	return collections
-
-
 def _list_firm_documents(firm_id: str, data_root: str = "data") -> list[dict]:
 	firms_dir = Path(data_root) / "firms" / firm_id
 	if not firms_dir.exists():
@@ -218,10 +381,10 @@ def _save_uploaded_pdf(uploaded_file, firm_id: str) -> Path:
 
 def _handle_public_search() -> None:
 	st.subheader("Public Law Search")
-	query = st.text_input("Search public law", key="public_query", placeholder="Ask about an article, section, or doctrine")
+	# Initialize the text input from any pending template set by buttons
+	default_public = st.session_state.pop("pending_public_query", st.session_state.get("public_query", ""))
+	query = st.text_input("Search public law", key="public_query", value=default_public, placeholder="Ask about an article, section, or doctrine")
 	search_disabled = not _RETRIEVAL_BACKEND_READY
-	if search_disabled:
-		st.info(_retrieval_backend_status_message())
 	if st.button("Search Public", key="public_search_button", disabled=search_disabled):
 		if not query.strip():
 			st.warning("Enter a question to search the public corpus.")
@@ -239,6 +402,7 @@ def _handle_public_search() -> None:
 
 	_render_answer_block(st.session_state.last_answer)
 	st.markdown("### Retrieved Public Sources")
+	_render_retrieval_summary(st.session_state.last_public_results)
 	_format_result_cards(st.session_state.last_public_results)
 
 
@@ -297,7 +461,8 @@ def _handle_firm_search(user: dict) -> None:
 		st.info("No firm id is attached to this account, so firm vault search is unavailable.")
 		return
 
-	query = st.text_input("Search firm vault", key="firm_query", placeholder="Ask about your firm documents")
+	default_firm = st.session_state.pop("pending_firm_query", st.session_state.get("firm_query", ""))
+	query = st.text_input("Search firm vault", key="firm_query", value=default_firm, placeholder="Ask about your firm documents")
 	if st.button("Search Firm Vault", key="firm_search_button"):
 		if not query.strip():
 			st.warning("Enter a question to search the firm vault.")
@@ -316,6 +481,7 @@ def _handle_firm_search(user: dict) -> None:
 
 	_render_answer_block(st.session_state.last_answer)
 	st.markdown("### Retrieved Firm Sources")
+	_render_retrieval_summary(st.session_state.last_firm_results)
 	_format_result_cards(st.session_state.last_firm_results)
 	st.markdown("### Firm Library")
 	for document in _list_firm_documents(firm_id):
@@ -334,7 +500,8 @@ def _handle_combined_search(user: dict) -> None:
 		st.info("Combined search requires a firm id.")
 		return
 
-	query = st.text_input("Search across public and firm sources", key="combined_query", placeholder="Ask a question that may span both corpora")
+	default_combined = st.session_state.pop("pending_combined_query", st.session_state.get("combined_query", ""))
+	query = st.text_input("Search across public and firm sources", key="combined_query", value=default_combined, placeholder="Ask a question that may span both corpora")
 	search_disabled = not _RETRIEVAL_BACKEND_READY
 	if search_disabled:
 		st.info(_retrieval_backend_status_message())
@@ -362,9 +529,11 @@ def _handle_combined_search(user: dict) -> None:
 	left, right = st.columns(2)
 	with left:
 		st.markdown("#### Public Law Sources")
+		_render_retrieval_summary(public_results)
 		_format_result_cards(public_results)
 	with right:
 		st.markdown("#### Firm Document Sources")
+		_render_retrieval_summary(firm_results)
 		_format_result_cards(firm_results)
 
 
@@ -399,6 +568,7 @@ def main() -> None:
 	st.set_page_config(page_title=APP_TITLE, page_icon="⚖️", layout="wide")
 	_initialize_state()
 	_ensure_retrieval_warmup_started()
+	_render_retrieval_status()
 	ensure_default_users(DEFAULT_DB_PATH)
 	_render_sidebar()
 

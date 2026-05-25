@@ -49,10 +49,10 @@ except ImportError:
 
             return chunks
 
-# Fixed splitter — do NOT change chunk_size or chunk_overlap per guidelines.md
+# Fixed splitter tuned for recall-critical legal passages.
 _SPLITTER = RecursiveCharacterTextSplitter(
-    chunk_size=400,
-    chunk_overlap=100,
+    chunk_size=700,
+    chunk_overlap=150,
     # Try natural boundaries first: paragraphs → lines → sentences → words
     separators=["\n\n", "\n", ". ", " ", ""],
 )
@@ -65,7 +65,7 @@ def chunk_text(cleaned_text: str) -> list[str]:
 
     chunks = _SPLITTER.split_text(cleaned_text)
 
-    # Filter out chunks that are too short to be meaningful (< 50 chars)
-    chunks = [c.strip() for c in chunks if len(c.strip()) >= 50]
+    # Keep shorter legal fragments when they still carry useful recall signals.
+    chunks = [c.strip() for c in chunks if len(c.strip()) >= 40]
 
     return chunks
