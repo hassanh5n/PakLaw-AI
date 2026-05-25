@@ -16,6 +16,23 @@ from functools import lru_cache
 import faiss
 import numpy as np
 
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
+
+try:
+	from huggingface_hub.utils import disable_progress_bars
+
+	disable_progress_bars()
+except Exception:
+	pass
+
+try:
+	from transformers.utils import logging as transformers_logging
+
+	transformers_logging.set_verbosity_error()
+except Exception:
+	pass
+
 from query_expander import expand_query
 
 
@@ -40,9 +57,12 @@ def get_embedding_backend():
 		) from exc
 
 	try:
-		return SentenceTransformer(EMBEDDING_MODEL_NAME)
+		return SentenceTransformer(EMBEDDING_MODEL_NAME, local_files_only=True)
 	except Exception as exc:
-		raise RuntimeError(f"Failed to load embedding model {EMBEDDING_MODEL_NAME}: {exc}") from exc
+		try:
+			return SentenceTransformer(EMBEDDING_MODEL_NAME)
+		except Exception as fallback_exc:
+			raise RuntimeError(f"Failed to load embedding model {EMBEDDING_MODEL_NAME}: {fallback_exc}") from fallback_exc
 
 
 @lru_cache(maxsize=1)
@@ -56,9 +76,12 @@ def get_reranker_backend():
 		) from exc
 
 	try:
-		return CrossEncoder(RERANKER_MODEL_NAME)
+		return CrossEncoder(RERANKER_MODEL_NAME, local_files_only=True)
 	except Exception as exc:
-		raise RuntimeError(f"Failed to load reranker model {RERANKER_MODEL_NAME}: {exc}") from exc
+		try:
+			return CrossEncoder(RERANKER_MODEL_NAME)
+		except Exception as fallback_exc:
+			raise RuntimeError(f"Failed to load reranker model {RERANKER_MODEL_NAME}: {fallback_exc}") from fallback_exc
 
 
 def _normalize_text(text: str) -> str:

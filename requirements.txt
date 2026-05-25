@@ -8,9 +8,10 @@ langchain-community   # LangChain community integrations
 langchain-text-splitters
 
 # Embeddings & Semantic Search 
-sentence-transformers # all-MiniLM-L6-v2 + cross-encoder
-faiss-cpu             # FAISS IndexFlatIP (CPU build)
-numpy                # Vector arrays used by FAISS
+sentence-transformers==3.0.1  # all-MiniLM-L6-v2 + cross-encoder
+faiss-cpu==1.13.1             # FAISS IndexFlatIP (CPU build)
+numpy==2.3.5                  # Vector arrays used by FAISS
+torch==2.6.0                  # Native backend used by sentence-transformers
 
 # Keyword Search 
 rank-bm25             # BM25Okapi keyword index
@@ -19,7 +20,7 @@ rank-bm25             # BM25Okapi keyword index
 groq                  # Groq API client
 
 # Web UI 
-streamlit          # 3-tab web application
+streamlit==1.57.0  # 3-tab web application
 
 # Auth & Storage 
 bcrypt                # Password hashing for user store

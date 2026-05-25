@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import pickle
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -30,6 +31,46 @@ APP_TITLE = "PakLaw AI"
 PUBLIC_CORPUS_LABEL = "public only"
 FIRM_CORPUS_LABEL = "firm only"
 COMBINED_CORPUS_LABEL = "combined"
+
+
+_RETRIEVAL_WARMUP_STARTED = False
+_RETRIEVAL_BACKEND_READY = False
+_RETRIEVAL_BACKEND_ERROR: str | None = None
+
+
+def _warm_retrieval_backends() -> None:
+	"""Load the heavy retrieval backends once per Streamlit process."""
+
+	global _RETRIEVAL_BACKEND_READY, _RETRIEVAL_BACKEND_ERROR
+
+	from retriever import get_embedding_backend, get_reranker_backend
+
+	try:
+		get_embedding_backend()
+		get_reranker_backend()
+		_RETRIEVAL_BACKEND_READY = True
+		_RETRIEVAL_BACKEND_ERROR = None
+	except Exception as exc:
+		_RETRIEVAL_BACKEND_READY = False
+		_RETRIEVAL_BACKEND_ERROR = str(exc)
+
+
+def _ensure_retrieval_warmup_started() -> None:
+	global _RETRIEVAL_WARMUP_STARTED
+
+	if _RETRIEVAL_WARMUP_STARTED:
+		return
+
+	_RETRIEVAL_WARMUP_STARTED = True
+	threading.Thread(target=_warm_retrieval_backends, name="retrieval-warmup", daemon=True).start()
+
+
+def _retrieval_backend_status_message() -> str:
+	if _RETRIEVAL_BACKEND_READY:
+		return "Retrieval models are ready."
+	if _RETRIEVAL_BACKEND_ERROR:
+		return f"Retrieval models are warming, but loading has not completed yet: {_RETRIEVAL_BACKEND_ERROR}"
+	return "Retrieval models are warming in the background. Please wait a moment before searching."
 
 
 def _initialize_state() -> None:
@@ -178,7 +219,10 @@ def _save_uploaded_pdf(uploaded_file, firm_id: str) -> Path:
 def _handle_public_search() -> None:
 	st.subheader("Public Law Search")
 	query = st.text_input("Search public law", key="public_query", placeholder="Ask about an article, section, or doctrine")
-	if st.button("Search Public", key="public_search_button"):
+	search_disabled = not _RETRIEVAL_BACKEND_READY
+	if search_disabled:
+		st.info(_retrieval_backend_status_message())
+	if st.button("Search Public", key="public_search_button", disabled=search_disabled):
 		if not query.strip():
 			st.warning("Enter a question to search the public corpus.")
 			return
@@ -291,7 +335,10 @@ def _handle_combined_search(user: dict) -> None:
 		return
 
 	query = st.text_input("Search across public and firm sources", key="combined_query", placeholder="Ask a question that may span both corpora")
-	if st.button("Search Combined", key="combined_search_button"):
+	search_disabled = not _RETRIEVAL_BACKEND_READY
+	if search_disabled:
+		st.info(_retrieval_backend_status_message())
+	if st.button("Search Combined", key="combined_search_button", disabled=search_disabled):
 		if not query.strip():
 			st.warning("Enter a question to search across both corpora.")
 			return
@@ -351,6 +398,7 @@ def main() -> None:
 
 	st.set_page_config(page_title=APP_TITLE, page_icon="⚖️", layout="wide")
 	_initialize_state()
+	_ensure_retrieval_warmup_started()
 	ensure_default_users(DEFAULT_DB_PATH)
 	_render_sidebar()
 
