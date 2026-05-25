@@ -1,8 +1,8 @@
 """
 Module: query_expander
-Purpose: Expands a user query into three semantically similar search queries.
+Purpose: Expands a user query into semantically similar search queries.
 Inputs: Original query string and optional Groq API configuration.
-Outputs: List of 3 query strings (original + 2 expansions).
+Outputs: Original query plus parsed model expansions, or the original query alone.
 Dependencies: groq, python-dotenv
 """
 
@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from typing import Iterable
 
 from dotenv import load_dotenv
@@ -33,47 +32,13 @@ def _dedupe_preserve_order(items: Iterable[str]) -> list[str]:
 	return deduped
 
 
-def _heuristic_expansions(query: str) -> list[str]:
-	base = query.strip().rstrip("? .")
-	variants = [
-		base,
-		f"What legal provision governs {base.lower()} in Pakistani law?",
-		f"Find the relevant article, section, or rule about {base.lower()}.",
-	]
-	return _dedupe_preserve_order(variants)[:3]
-
-
-def _parse_model_output(raw_text: str, original_query: str) -> list[str]:
-	text = raw_text.strip()
-
-	if not text:
-		return _heuristic_expansions(original_query)
-
-	json_match = re.search(r"\[[\s\S]*\]", text)
-	if json_match:
-		try:
-			parsed = json.loads(json_match.group(0))
-			if isinstance(parsed, list):
-				variants = [str(item) for item in parsed if str(item).strip()]
-				return _dedupe_preserve_order([original_query, *variants])[:3]
-		except json.JSONDecodeError:
-			pass
-
-	lines = [line.strip("-• \t") for line in text.splitlines() if line.strip()]
-	variants = [line for line in lines if line and not line.lower().startswith("json")]
-	if len(variants) >= 2:
-		return _dedupe_preserve_order([original_query, *variants])[:3]
-
-	return _heuristic_expansions(original_query)
-
-
 def expand_query(
 	query: str,
 	api_key: str | None = None,
-	model: str = "llama3-8b-8192",
+	model: str = "llama-3.1-8b-instant",
 ) -> list[str]:
 	"""
-	Expand a query into the original text plus two alternate phrasings.
+	Expand a query into the original text plus model-provided alternate phrasings.
 
 	Args:
 		query: User question or search string.
@@ -81,8 +46,8 @@ def expand_query(
 		model: Groq model name used for expansion.
 
 	Returns:
-		A list of exactly three query strings when possible, otherwise the best
-		unique variants available.
+		A deduplicated list beginning with the original query. If expansion fails,
+		returns the original query as a single-item list.
 	"""
 
 	load_dotenv()
@@ -92,7 +57,7 @@ def expand_query(
 
 	resolved_api_key = api_key or os.getenv("GROQ_API_KEY")
 	if not resolved_api_key:
-		return _heuristic_expansions(cleaned_query)
+		return [cleaned_query]
 
 	try:
 		from groq import Groq
@@ -108,17 +73,17 @@ def expand_query(
 						"You rewrite legal research queries for Pakistani law search. "
 						"Return exactly two alternative phrasings of the user's query. "
 						"Do not answer the question, do not add explanations, and keep meaning unchanged. "
-						"Return the result as a JSON array of two strings."
+						"Return only a JSON array of two strings."
 					),
 				},
-				{
-					"role": "user",
-					"content": cleaned_query,
-				},
+				{"role": "user", "content": cleaned_query},
 			],
 		)
-		expanded_text = response.choices[0].message.content or ""
-		return _parse_model_output(expanded_text, cleaned_query)
+		raw_text = response.choices[0].message.content or ""
+		parsed = json.loads(raw_text)
+		if not isinstance(parsed, list):
+			return [cleaned_query]
+		variants = [str(item) for item in parsed if str(item).strip()]
+		return _dedupe_preserve_order([cleaned_query, *variants])[:3]
 	except Exception:
-		return _heuristic_expansions(cleaned_query)
-
+		return [cleaned_query]

@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from retriever import retrieve_public_chunks
+from retriever import retrieve_chunks
 from generator import generate_answer
 
 
@@ -18,7 +18,7 @@ def main():
     print("Demo query:", query)
 
     print("Running retrieval (public)...")
-    hits = retrieve_public_chunks(query, index_root="indexes", top_k=5)
+    hits = retrieve_chunks(query, role="public", index_root="indexes", top_k=5)
     print(f"Retrieved {len(hits)} chunks")
     for i, h in enumerate(hits, start=1):
         print(f"{i}. {h.get('chunk_id')} — {h.get('source_doc')} — {h.get('section_hint')}")

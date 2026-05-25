@@ -68,15 +68,15 @@ Public corpus ingestion extracts text from PDFs, cleans noise, chunks the text, 
 
 ### 5.2 Retrieval
 
-The retrieval layer expands a query into three phrasings, runs each query through FAISS and BM25, merges and deduplicates candidates, filters by access level and firm, and reranks candidates with a cross-encoder. The final output is the top 10 chunks.
+The retrieval layer asks Groq for JSON query expansions and falls back to the original query if expansion fails. It runs each query through FAISS and BM25, merges and deduplicates candidates, filters by role and firm, and reranks candidates with a cross-encoder. The final output is the top 10 chunks.
 
 ### 5.3 Generation
 
-The generator constructs a legal prompt with the fixed system instructions and retrieved context, then calls Groq to produce a cited answer. If no chunks are available, it returns the exact no-found sentence required by the guidelines.
+The generator constructs a legal prompt with the fixed system instructions and retrieved context, then calls Groq's `llama-3.1-8b-instant` model to produce a cited answer. If no chunks are available, generation stops instead of producing an unsupported answer.
 
 ### 5.4 Access Control
 
-Access control is implemented with SQLite and bcrypt. The module stores usernames, password hashes, roles, and optional firm IDs, and it maps user roles to the correct index paths.
+Access control is implemented with SQLite and bcrypt. The module stores usernames, password hashes, three roles (`public`, `user`, and `admin`), and optional firm IDs, then maps users to the correct index paths.
 
 ### 5.5 UI
 
@@ -86,7 +86,7 @@ The Streamlit app provides three tabs:
 - Firm Vault
 - Combined Search
 
-The sidebar shows the current user, role, firm, and active corpus. Public search works without login. Firm vault features login and PDF upload. Combined search is restricted to partner-level access.
+The sidebar shows the current user, role, firm, and active corpus. Public search works without login. Firm vault search requires a firm-linked login, PDF upload is admin-only, and combined search is available to logged-in firm users.
 
 ## 6. Evaluation Plan
 

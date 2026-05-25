@@ -8,27 +8,16 @@ Dependencies: sqlite3, bcrypt
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import os
-import secrets
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-try:
-	import bcrypt
-	_HAS_BCRYPT = True
-except ImportError:
-	bcrypt = None
-	_HAS_BCRYPT = False
+import bcrypt
 
 
 DEFAULT_DB_PATH = os.path.join("data", "users.sqlite3")
-
-VALID_ROLES = {"public", "associate", "partner", "admin"}
-_PBKDF2_PREFIX = "pbkdf2_sha256"
-_PBKDF2_ITERATIONS = 390000
+VALID_ROLES = {"public", "user", "admin"}
 
 
 @dataclass(frozen=True)
@@ -38,6 +27,10 @@ class UserRecord:
 	username: str
 	role: str
 	firm_id: str | None
+
+
+def _normalize_role(role: str) -> str:
+	return role.lower().strip()
 
 
 def get_connection(db_path: str = DEFAULT_DB_PATH) -> sqlite3.Connection:
@@ -93,17 +86,7 @@ def hash_password(password: str) -> str:
 		A bcrypt hash string.
 	"""
 
-	if _HAS_BCRYPT:
-		return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-
-	salt = secrets.token_hex(16)
-	digest = hashlib.pbkdf2_hmac(
-		"sha256",
-		password.encode("utf-8"),
-		salt.encode("utf-8"),
-		_PBKDF2_ITERATIONS,
-	)
-	return f"{_PBKDF2_PREFIX}${_PBKDF2_ITERATIONS}${salt}${digest.hex()}"
+	return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(password: str, password_hash: str) -> bool:
@@ -119,19 +102,6 @@ def verify_password(password: str, password_hash: str) -> bool:
 	"""
 
 	try:
-		if password_hash.startswith(f"{_PBKDF2_PREFIX}$"):
-			_, iteration_text, salt, expected_hex = password_hash.split("$", 3)
-			iterations = int(iteration_text)
-			digest = hashlib.pbkdf2_hmac(
-				"sha256",
-				password.encode("utf-8"),
-				salt.encode("utf-8"),
-				iterations,
-			)
-			return hmac.compare_digest(digest.hex(), expected_hex)
-
-		if not _HAS_BCRYPT:
-			return False
 		return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
 	except (ValueError, TypeError):
 		return False
@@ -158,12 +128,13 @@ def create_user(
 		The created user record.
 	"""
 
-	normalized_role = role.lower().strip()
+	normalized_role = _normalize_role(role)
 	if normalized_role not in VALID_ROLES:
 		raise ValueError(f"Unsupported role: {role}")
 
 	initialize_user_store(db_path)
 	password_hash = hash_password(password)
+	normalized_firm_id = firm_id.strip() if firm_id else None
 
 	with get_connection(db_path) as connection:
 		connection.execute(
@@ -175,11 +146,11 @@ def create_user(
 				role = excluded.role,
 				firm_id = excluded.firm_id
 			""",
-			(username.strip(), password_hash, normalized_role, firm_id.strip() if firm_id else None),
+			(username.strip(), password_hash, normalized_role, normalized_firm_id),
 		)
 		connection.commit()
 
-	return UserRecord(username=username.strip(), role=normalized_role, firm_id=firm_id.strip() if firm_id else None)
+	return UserRecord(username=username.strip(), role=normalized_role, firm_id=normalized_firm_id)
 
 
 def authenticate_user(username: str, password: str, db_path: str = DEFAULT_DB_PATH) -> UserRecord | None:
@@ -209,9 +180,13 @@ def authenticate_user(username: str, password: str, db_path: str = DEFAULT_DB_PA
 	if not verify_password(password, row["password_hash"]):
 		return None
 
+	role = _normalize_role(row["role"])
+	if role not in VALID_ROLES:
+		return None
+
 	return UserRecord(
 		username=row["username"],
-		role=row["role"],
+		role=role,
 		firm_id=row["firm_id"],
 	)
 
@@ -239,7 +214,11 @@ def get_user(username: str, db_path: str = DEFAULT_DB_PATH) -> UserRecord | None
 	if row is None:
 		return None
 
-	return UserRecord(username=row["username"], role=row["role"], firm_id=row["firm_id"])
+	role = _normalize_role(row["role"])
+	if role not in VALID_ROLES:
+		return None
+
+	return UserRecord(username=row["username"], role=role, firm_id=row["firm_id"])
 
 
 def list_users(db_path: str = DEFAULT_DB_PATH) -> list[UserRecord]:
@@ -260,7 +239,12 @@ def list_users(db_path: str = DEFAULT_DB_PATH) -> list[UserRecord]:
 			"SELECT username, role, firm_id FROM users ORDER BY username"
 		).fetchall()
 
-	return [UserRecord(username=row["username"], role=row["role"], firm_id=row["firm_id"]) for row in rows]
+	users: list[UserRecord] = []
+	for row in rows:
+		role = _normalize_role(row["role"])
+		if role in VALID_ROLES:
+			users.append(UserRecord(username=row["username"], role=role, firm_id=row["firm_id"]))
+	return users
 
 
 def get_role_indexes(role: str, firm_id: str | None = None) -> list[str]:
@@ -269,19 +253,17 @@ def get_role_indexes(role: str, firm_id: str | None = None) -> list[str]:
 
 	Args:
 		role: User role.
-		firm_id: Firm identifier required for firm-scoped access.
+		firm_id: Firm identifier required for firm index access.
 
 	Returns:
 		A list of corpus names in search order.
 	"""
 
-	normalized_role = role.lower().strip()
+	normalized_role = _normalize_role(role)
 	if normalized_role == "public":
 		return ["public"]
 
-	if normalized_role in {"associate", "partner", "admin"}:
-		if not firm_id and normalized_role != "admin":
-			raise ValueError("firm_id is required for associate and partner access")
+	if normalized_role in {"user", "admin"}:
 		return ["public", "firm"] if firm_id else ["public"]
 
 	raise ValueError(f"Unsupported role: {role}")
@@ -332,11 +314,11 @@ def route_user_access(user: UserRecord | dict, index_root: str = "indexes") -> d
 
 	if isinstance(user, dict):
 		username = str(user.get("username", "")).strip()
-		role = str(user.get("role", "public")).strip().lower()
+		role = _normalize_role(str(user.get("role", "public")))
 		firm_id = user.get("firm_id")
 	else:
 		username = user.username
-		role = user.role
+		role = _normalize_role(user.role)
 		firm_id = user.firm_id
 
 	return {
@@ -350,7 +332,7 @@ def route_user_access(user: UserRecord | dict, index_root: str = "indexes") -> d
 
 def ensure_default_users(db_path: str = DEFAULT_DB_PATH) -> None:
 	"""
-	Seed a minimal set of demo accounts if the database is empty.
+	Seed the demo login accounts when they are missing.
 
 	Args:
 		db_path: Path to the SQLite user store.
@@ -360,14 +342,7 @@ def ensure_default_users(db_path: str = DEFAULT_DB_PATH) -> None:
 	"""
 
 	initialize_user_store(db_path)
-	with get_connection(db_path) as connection:
-		count = connection.execute("SELECT COUNT(*) AS count FROM users").fetchone()["count"]
-
-	if count:
-		return
-
-	create_user("public_demo", "public123", "public", None, db_path=db_path)
-	create_user("associate_demo", "associate123", "associate", "firm_alpha", db_path=db_path)
-	create_user("partner_demo", "partner123", "partner", "firm_alpha", db_path=db_path)
-	create_user("admin_demo", "admin123", "admin", "firm_alpha", db_path=db_path)
-
+	if get_user("user_demo", db_path=db_path) is None:
+		create_user("user_demo", "user123", "user", "firm_alpha", db_path=db_path)
+	if get_user("admin_demo", db_path=db_path) is None:
+		create_user("admin_demo", "admin123", "admin", "firm_alpha", db_path=db_path)

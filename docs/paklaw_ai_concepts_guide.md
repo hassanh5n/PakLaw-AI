@@ -539,7 +539,7 @@ Alternative 1:
 Alternative 2:"""
 
 response = groq_client.chat.completions.create(
-    model="llama3-8b-8192",
+    model="llama-3.1-8b-instant",
     messages=[{"role": "user", "content": prompt}]
 )
 # Parse the 2 alternatives from the response
@@ -637,7 +637,7 @@ from groq import Groq
 client = Groq(api_key="your_api_key_here")
 
 response = client.chat.completions.create(
-    model="llama3-8b-8192",  # Llama 3, 8B parameters, 8192 token context
+    model="llama-3.1-8b-instant",
     messages=[
         {"role": "system", "content": "You are a legal research assistant..."},
         {"role": "user", "content": "Based on the following context, answer..."}
@@ -658,11 +658,9 @@ answer = response.choices[0].message.content
 
 Since PakLaw AI is a university project, the free tier constraint makes Groq the right choice.
 
-### What Does "8192" Mean?
+### Which Groq Model Is Used?
 
-`llama3-8b-8192` means:
-- **8b** = 8 billion parameters
-- **8192** = context window of 8,192 **tokens** (roughly 6,000 words)
+`llama-3.1-8b-instant` is the single Groq model used for generation in this project.
 
 A **token** is roughly ¾ of a word. "punishment" = 1 token, "un" + "constitutional" = 2 tokens.
 
@@ -749,9 +747,8 @@ A law firm's internal memos, case strategies, and client documents must **never*
 | Role | What They Can Do |
 |------|-----------------|
 | `public` | Search public laws only (no login needed) |
-| `associate` | Search public laws + their firm's documents (except partner-only docs) |
-| `partner` | Search everything: public + all of their firm's documents |
-| `admin` | Full access + can upload/delete documents |
+| `user` | Search public laws + their firm's documents |
+| `admin` | Search public laws + their firm's documents + upload documents |
 
 ### How Isolation Works
 
@@ -783,7 +780,7 @@ Users and their credentials are stored in a simple **SQLite database**:
 {
     "username": "sarah_ahmed",
     "password_hash": "bcrypt_hash_here",  # Never store plain passwords!
-    "role": "partner",
+    "role": "user",
     "firm_id": "firm_abc"
 }
 ```

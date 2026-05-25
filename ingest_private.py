@@ -19,7 +19,7 @@ from build_bm25 import build_bm25_index
 def ingest_firm_pdf(
     pdf_path: str,
     firm_id: str,
-    access_level: str = "associate",
+    access_level: str = "firm",
 ) -> None:
     import pickle
 

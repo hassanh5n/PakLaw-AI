@@ -8,11 +8,29 @@ Dependencies: sentence-transformers, faiss-cpu, numpy, pickle
 
 import os
 import pickle
-import json
+from functools import lru_cache
 
 import faiss
 import numpy as np
-from vector_backends import EMBEDDING_DIM, get_embedding_backend
+
+
+EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+
+
+@lru_cache(maxsize=1)
+def get_embedding_backend():
+    """Load the transformer embedding model required for FAISS indexing."""
+    try:
+        from sentence_transformers import SentenceTransformer
+    except ImportError as exc:
+        raise RuntimeError(
+            "sentence-transformers is required for indexing. Install requirements.txt before running ingestion."
+        ) from exc
+
+    try:
+        return SentenceTransformer(EMBEDDING_MODEL_NAME)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to load embedding model {EMBEDDING_MODEL_NAME}: {exc}") from exc
 
 
 def _normalize_embeddings(embeddings: np.ndarray) -> np.ndarray:
@@ -43,24 +61,15 @@ def build_faiss_index(
     embeddings = np.asarray(embeddings, dtype="float32")
     embeddings = _normalize_embeddings(embeddings)
 
-    # Build FAISS index — IndexFlatIP performs exact inner-product search
-    index = faiss.IndexFlatIP(EMBEDDING_DIM)
+    # IndexFlatIP performs exact inner-product search.
+    index = faiss.IndexFlatIP(embeddings.shape[1])
     index.add(embeddings)
 
-    # Save FAISS index
     faiss_path = os.path.join(output_dir, f"{index_name}.faiss")
     faiss.write_index(index, faiss_path)
-    print(f"Saved FAISS index → {faiss_path}  ({index.ntotal} vectors)")
+    print(f"Saved FAISS index -> {faiss_path}  ({index.ntotal} vectors)")
 
-    # Save the original chunk dicts alongside the index so we can retrieve
-    # metadata (source_doc, section_hint, etc.) from search results
     chunks_path = os.path.join(output_dir, f"{index_name}_chunks.pkl")
     with open(chunks_path, "wb") as f:
         pickle.dump(chunks, f)
-    print(f"Saved chunks     → {chunks_path}  ({len(chunks)} chunks)")
-
-    backend_name = getattr(model, "backend_name", model.__class__.__name__)
-    backend_path = os.path.join(output_dir, f"{index_name}_backend.json")
-    with open(backend_path, "w", encoding="utf-8") as f:
-        json.dump({"embedding_backend": backend_name}, f, indent=2)
-    print(f"Saved backend    → {backend_path}  ({backend_name})")
+    print(f"Saved chunks     -> {chunks_path}  ({len(chunks)} chunks)")

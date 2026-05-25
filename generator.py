@@ -15,6 +15,9 @@ from dotenv import load_dotenv
 from prompts import SYSTEM_PROMPT, build_user_prompt
 
 
+DEFAULT_GROQ_MODEL = "llama-3.1-8b-instant"
+
+
 def generate_answer(
 	query: str,
 	chunks: list[dict],
@@ -43,47 +46,28 @@ def generate_answer(
 	if not resolved_api_key:
 		raise RuntimeError("GROQ_API_KEY is not configured. Set it in the environment or pass api_key.")
 
-	# Build candidate model list: explicit param > env GROQ_MODEL (comma-separated) > sensible defaults
-	env_model = os.getenv("GROQ_MODEL")
-	if model:
-		candidates = [model]
-	elif env_model:
-		candidates = [m.strip() for m in env_model.split(",") if m.strip()]
-	else:
-		candidates = [
-			"llama-3.1-8b-instant",
-			"llama-3.3-70b-versatile",
-			"openai/gpt-oss-20b",
-			"openai/gpt-oss-120b",
-		]
-
-	last_exc = None
 	try:
 		from groq import Groq
 	except Exception as exc:
-		last_exc = exc
-		Groq = None
+		raise RuntimeError(f"Failed to import Groq client: {exc}") from exc
 
-	if Groq is not None:
-		client = Groq(api_key=resolved_api_key)
-		for candidate in candidates:
-			try:
-				response = client.chat.completions.create(
-					model=candidate,
-					temperature=0.1,
-					messages=[
-						{"role": "system", "content": SYSTEM_PROMPT},
-						{"role": "user", "content": build_user_prompt(query, chunks)},
-					],
-				)
-				answer = response.choices[0].message.content or ""
-				answer = answer.strip()
-				if answer:
-					return answer
-			except Exception as exc:
-				last_exc = exc
+	resolved_model = model or DEFAULT_GROQ_MODEL
+	client = Groq(api_key=resolved_api_key)
 
-	if last_exc is not None:
-		raise RuntimeError(f"Failed to generate answer with Groq: {last_exc}") from last_exc
-	raise RuntimeError("Failed to generate answer with Groq: no supported model produced a response.")
+	try:
+		response = client.chat.completions.create(
+			model=resolved_model,
+			temperature=0.1,
+			messages=[
+				{"role": "system", "content": SYSTEM_PROMPT},
+				{"role": "user", "content": build_user_prompt(query, chunks)},
+			],
+		)
+	except Exception as exc:
+		raise RuntimeError(f"Failed to generate answer with Groq model {resolved_model}: {exc}") from exc
+
+	answer = (response.choices[0].message.content or "").strip()
+	if not answer:
+		raise RuntimeError(f"Groq model {resolved_model} returned an empty answer.")
+	return answer
 

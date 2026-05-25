@@ -62,7 +62,7 @@ def main() -> None:
 	print(_status("Baseline results scaffold", eval_baseline.exists(), "eval/results_baseline.md"))
 	print(_status("Metrics sheet", eval_metrics.exists(), "eval/metrics.md"))
 	print(_status("Generation log", test_log.exists(), "tests/q_and_a_log.md"))
-	print(_status("bcrypt package", find_spec("bcrypt") is not None, "optional auth dependency"))
+	print(_status("bcrypt package", find_spec("bcrypt") is not None, "required auth dependency"))
 	print(_status("langchain_text_splitters package", find_spec("langchain_text_splitters") is not None, "optional chunking dependency"))
 
 

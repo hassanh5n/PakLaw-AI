@@ -55,7 +55,7 @@ PakLaw AI is a recall-critical, dual-layer legal retrieval system for Pakistani 
 ### Tasks
 
 - **T3.1** — Reuse Phase 2 extractor/cleaner/chunker; parameterize for firm context
-- **T3.2** — Add firm-specific metadata: `firm_id`, `access_level` (partner/associate)
+- **T3.2** — Add firm-specific metadata: `firm_id`, `access_level` (`firm`)
 - **T3.3** — Save firm indexes to `/indexes/firms/{firm_id}/` — completely isolated from public
 - **T3.4** — Test: upload one sample firm PDF, confirm it appears **only** in that firm's index
 
@@ -72,9 +72,9 @@ PakLaw AI is a recall-critical, dual-layer legal retrieval system for Pakistani 
 - **T4.1** — Write FAISS search function: embed query, search index, return top-15 with metadata
 - **T4.2** — Write BM25 search function: tokenize query, search, return top-15 with metadata
 - **T4.3** — Write merge + deduplication function: combine FAISS + BM25 results, dedupe by `chunk_id`
-- **T4.4** — Write `query_expander.py`: call Groq API, generate 2 alternate phrasings, return list of 3 queries
-- **T4.5** — Connect: run all 3 queries through hybrid retriever, merge all results (~25–30 unique chunks)
-- **T4.6** — Write metadata filter: apply `firm_id` and `access_level` filter based on user role
+- **T4.4** — Write `query_expander.py`: call Groq API, parse a JSON array, return original query if expansion fails
+- **T4.5** — Connect: run returned query variants through hybrid retriever and merge results
+- **T4.6** — Write metadata filter: apply `firm_id` and simplified role filter
 - **T4.7** — Integrate cross-encoder re-ranker (`cross-encoder/ms-marco-MiniLM-L-6-v2`): score each chunk against original query, select top-10
 
 **Exit Criteria:** Given a query and a role, `retriever.py` returns top-10 ranked, access-filtered chunks in under 3 seconds.
@@ -87,7 +87,7 @@ PakLaw AI is a recall-critical, dual-layer legal retrieval system for Pakistani 
 
 ### Tasks
 
-- **T5.1** — Write `generator.py`: accepts query + top-10 chunks, constructs prompt, calls Groq API (`llama3-8b-8192`)
+- **T5.1** — Write `generator.py`: accepts query + top-10 chunks, constructs prompt, calls Groq API (`llama-3.1-8b-instant`)
 - **T5.2** — Write and lock in the system prompt (see `guidelines.md` for exact constraints)
 - **T5.3** — Test 20 questions end-to-end; record which work, which produce weak/wrong answers
 - **T5.4** — Iterate on prompt if needed; do not change architecture to fix prompt problems
@@ -106,12 +106,11 @@ PakLaw AI is a recall-critical, dual-layer legal retrieval system for Pakistani 
 - **T6.2** — Write login check and role assignment function
 - **T6.3** — Write query router: maps role → correct index(es) to search
   - `public` → public index only
-  - `associate` → public + firm index (access_level ≤ associate)
-  - `partner` → public + firm index (all access levels)
-  - `admin` → full access + upload/delete permissions
+  - `user` → public + own firm index
+  - `admin` → public + own firm index + upload permission
 - **T6.4** — Test cross-firm isolation: confirm Firm A user cannot retrieve Firm B chunks under any role
 
-**Exit Criteria:** All four roles route correctly; cross-firm test passes with zero leakage.
+**Exit Criteria:** All three roles route correctly; cross-firm test passes with zero leakage.
 
 ---
 
@@ -124,7 +123,7 @@ PakLaw AI is a recall-critical, dual-layer legal retrieval system for Pakistani 
 - **T7.1** — Scaffold Streamlit app with three tabs + sidebar
 - **T7.2** — Build **Tab 1 — Public Law Search**: search bar → public retriever → generator → results with source sections
 - **T7.3** — Build **Tab 2 — Firm Vault**: login panel → private retriever → generator → results with doc name + page reference; document uploader + library view
-- **T7.4** — Build **Tab 3 — Combined Search** (partner only): combined retriever → generator → split results display (Public Law Sources | Firm Document Sources)
+- **T7.4** — Build **Tab 3 — Combined Search** (login required): combined retriever → generator → split results display (Public Law Sources | Firm Document Sources)
 - **T7.5** — Build sidebar: logged-in user info, active corpus label, logout
 - **T7.6** — End-to-end user flow test: login, upload, search, combine, logout
 - **T7.7** — Fix UI bugs; ensure every retrieved chunk shows its source label

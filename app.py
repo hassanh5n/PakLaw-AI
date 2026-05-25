@@ -23,8 +23,7 @@ from access_control import (
 	route_user_access,
 )
 from generator import generate_answer
-from ingest_private import ingest_firm_pdf
-from retriever import retrieve_chunks, retrieve_firm_chunks, retrieve_public_chunks
+from retriever import retrieve_chunks
 
 
 APP_TITLE = "PakLaw AI"
@@ -185,9 +184,10 @@ def _handle_public_search() -> None:
 			return
 		with st.spinner("Retrieving public results..."):
 			results = _safe_retrieve(
-				retrieve_public_chunks,
+				retrieve_chunks,
 				query,
 				"Public indexes are missing. Run public ingestion first",
+				role="public",
 			)
 			st.session_state.last_public_results = results
 			st.session_state.last_answer = _generate_answer_safe(query, results)
@@ -221,11 +221,11 @@ def _handle_firm_login_panel() -> None:
 def _handle_firm_uploads(user: dict) -> None:
 	role = user["role"]
 	firm_id = user.get("firm_id")
-	can_upload = role in {"admin", "partner"} and bool(firm_id)
+	can_upload = role == "admin" and bool(firm_id)
 
 	st.markdown("### Upload PDF")
 	if not can_upload:
-		st.caption("Upload is available for partner and admin users with a firm id.")
+		st.caption("Upload is available for admin users with a firm id.")
 		return
 
 	uploaded_file = st.file_uploader("Upload a firm PDF", type=["pdf"], key="firm_pdf_uploader")
@@ -237,8 +237,10 @@ def _handle_firm_uploads(user: dict) -> None:
 			st.error("Firm id is required for uploads.")
 			return
 		with st.spinner("Saving and ingesting firm document..."):
+			from ingest_private import ingest_firm_pdf
+
 			pdf_path = _save_uploaded_pdf(uploaded_file, firm_id)
-			ingest_firm_pdf(str(pdf_path), firm_id=firm_id, access_level=role)
+			ingest_firm_pdf(str(pdf_path), firm_id=firm_id, access_level="firm")
 			st.success(f"Ingested {uploaded_file.name} into firm index {firm_id}.")
 			st.rerun()
 
@@ -258,7 +260,7 @@ def _handle_firm_search(user: dict) -> None:
 			return
 		with st.spinner("Retrieving firm results..."):
 			results = _safe_retrieve(
-				retrieve_firm_chunks,
+				retrieve_chunks,
 				query,
 				"Firm indexes are missing for this firm. Ingest at least one PDF first",
 				firm_id=firm_id,
@@ -281,8 +283,8 @@ def _handle_combined_search(user: dict) -> None:
 	role = user["role"]
 	firm_id = user.get("firm_id")
 
-	if role not in {"partner", "admin"}:
-		st.info("Combined search requires partner-level access.")
+	if role not in {"user", "admin"}:
+		st.info("Combined search requires login.")
 		return
 	if not firm_id:
 		st.info("Combined search requires a firm id.")
@@ -353,7 +355,7 @@ def main() -> None:
 	_render_sidebar()
 
 	st.title(APP_TITLE)
-	st.write("Search public law, firm vault content, or a combined partner-only corpus.")
+	st.write("Search public law, firm vault content, or the combined logged-in corpus.")
 
 	tab_public, tab_firm, tab_combined = st.tabs(["Public Search", "Firm Vault", "Combined Search"])
 
@@ -374,7 +376,7 @@ def main() -> None:
 		if user:
 			_handle_combined_search(user)
 		else:
-			st.info("Partner login is required for combined search.")
+			st.info("Login is required for combined search.")
 
 
 if __name__ == "__main__":

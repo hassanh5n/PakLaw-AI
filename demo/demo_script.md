@@ -7,7 +7,7 @@ This script covers the three required live demo scenarios: public search, firm v
 - Start the app with `streamlit run app.py`.
 - Ensure the indexes under `indexes/public/` and `indexes/firms/{firm_id}/` exist.
 - Ensure `GROQ_API_KEY` is configured if you want live answer generation.
-- Use one public account and one partner account for the firm demo.
+- Use `user_demo` for firm search and `admin_demo` if you want to show upload.
 
 ## Demo Flow
 
@@ -31,8 +31,8 @@ Goal: show login, restricted access, and firm-only retrieval.
 
 Suggested login:
 
-- username: `partner_demo`
-- password: `partner123`
+- username: `user_demo`
+- password: `user123`
 
 Suggested query:
 
@@ -43,11 +43,16 @@ What to highlight:
 - login handling in the sidebar
 - firm-specific search results
 - the firm document library list
-- upload and ingest flow for a PDF if you want to show private corpus expansion
+- upload and ingest flow with `admin_demo` if you want to show private corpus expansion
+
+Admin upload login:
+
+- username: `admin_demo`
+- password: `admin123`
 
 ### 3. Combined Search
 
-Goal: show partner-only merged retrieval across public and firm corpora.
+Goal: show logged-in merged retrieval across public and firm corpora.
 
 Suggested query:
 
@@ -55,7 +60,7 @@ Suggested query:
 
 What to highlight:
 
-- partner-only access to the Combined Search tab
+- login-required access to the Combined Search tab
 - split display of Public Law Sources and Firm Document Sources
 - the unified answer synthesized from both corpora
 
@@ -66,7 +71,7 @@ Goal: show that access is role-aware and routed server-side.
 Suggested check:
 
 - log out
-- log in as a public user
+- stay logged out
 - confirm Combined Search is not available
 - confirm firm-only search is unavailable without a firm-linked account
 

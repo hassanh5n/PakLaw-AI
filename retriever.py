@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import os
 import pickle
-import json
 from typing import Iterable
 from functools import lru_cache
 
@@ -18,7 +17,6 @@ import faiss
 import numpy as np
 
 from query_expander import expand_query
-from vector_backends import get_embedding_backend, get_reranker_backend
 
 
 PUBLIC_INDEX_NAME = "pakistan_law_public"
@@ -27,7 +25,40 @@ DEFAULT_INDEX_ROOT = "indexes"
 FAISS_TOP_K = 15
 BM25_TOP_K = 15
 RERANK_TOP_K = 10
-_ACCESS_LEVEL_ORDER = {"public": 0, "associate": 1, "partner": 2}
+EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+RERANKER_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+
+
+@lru_cache(maxsize=1)
+def get_embedding_backend():
+	"""Load the transformer embedding model required for query embedding."""
+	try:
+		from sentence_transformers import SentenceTransformer
+	except ImportError as exc:
+		raise RuntimeError(
+			"sentence-transformers is required for retrieval. Install requirements.txt before running search."
+		) from exc
+
+	try:
+		return SentenceTransformer(EMBEDDING_MODEL_NAME)
+	except Exception as exc:
+		raise RuntimeError(f"Failed to load embedding model {EMBEDDING_MODEL_NAME}: {exc}") from exc
+
+
+@lru_cache(maxsize=1)
+def get_reranker_backend():
+	"""Load the transformer cross-encoder required for reranking."""
+	try:
+		from sentence_transformers import CrossEncoder
+	except ImportError as exc:
+		raise RuntimeError(
+			"sentence-transformers is required for reranking. Install requirements.txt before running search."
+		) from exc
+
+	try:
+		return CrossEncoder(RERANKER_MODEL_NAME)
+	except Exception as exc:
+		raise RuntimeError(f"Failed to load reranker model {RERANKER_MODEL_NAME}: {exc}") from exc
 
 
 def _normalize_text(text: str) -> str:
@@ -98,20 +129,11 @@ def _load_corpus_assets(index_root: str, corpus: str, firm_id: str | None = None
 	chunks = _load_pickle(chunks_path)
 	bm25 = _load_pickle(bm25_path)
 
-	backend_path = os.path.join(base_dir, f"{index_name}_backend.json")
-	embedding_backend = None
-	if os.path.exists(backend_path):
-		try:
-			with open(backend_path, "r", encoding="utf-8") as handle:
-				embedding_backend = json.load(handle).get("embedding_backend")
-		except Exception:
-			embedding_backend = None
-
-	return index, chunks, bm25, embedding_backend
+	return index, chunks, bm25
 
 
-def _embed_query(query: str, embedding_backend: str | None = None) -> np.ndarray:
-	model = get_embedding_backend("local" if embedding_backend == "local-hash" else embedding_backend)
+def _embed_query(query: str) -> np.ndarray:
+	model = get_embedding_backend()
 	try:
 		embedding = model.encode([query], normalize_embeddings=True)
 	except TypeError:
@@ -119,8 +141,8 @@ def _embed_query(query: str, embedding_backend: str | None = None) -> np.ndarray
 	return np.asarray(embedding, dtype="float32")
 
 
-def _faiss_hits(query: str, index, chunks: list[dict], corpus: str, firm_id: str | None, embedding_backend: str | None, top_k: int = FAISS_TOP_K) -> list[dict]:
-	query_vector = _embed_query(query, embedding_backend)
+def _faiss_hits(query: str, index, chunks: list[dict], corpus: str, firm_id: str | None, top_k: int = FAISS_TOP_K) -> list[dict]:
+	query_vector = _embed_query(query)
 	scores, indices = index.search(query_vector, top_k)
 	hits: list[dict] = []
 
@@ -175,18 +197,18 @@ def _bm25_hits(query: str, bm25, chunks: list[dict], corpus: str, firm_id: str |
 
 
 def _search_corpus(query_variants: list[str], corpus: str, index_root: str, firm_id: str | None = None) -> list[dict]:
-	index, chunks, bm25, embedding_backend = _load_corpus_assets(index_root, corpus, firm_id)
+	index, chunks, bm25 = _load_corpus_assets(index_root, corpus, firm_id)
 	collected: list[dict] = []
 
 	for query in query_variants:
-		collected.extend(_faiss_hits(query, index, chunks, corpus, firm_id, embedding_backend))
+		collected.extend(_faiss_hits(query, index, chunks, corpus, firm_id))
 		collected.extend(_bm25_hits(query, bm25, chunks, corpus, firm_id))
 
 	return _dedupe_by_chunk_id(collected)
 
 
 def _search_corpus_bm25_only(query_variants: list[str], corpus: str, index_root: str, firm_id: str | None = None) -> list[dict]:
-	_, chunks, bm25, _ = _load_corpus_assets(index_root, corpus, firm_id)
+	_, chunks, bm25 = _load_corpus_assets(index_root, corpus, firm_id)
 	collected: list[dict] = []
 
 	for query in query_variants:
@@ -201,10 +223,8 @@ def _access_level_allows(role: str, access_level: str) -> bool:
 
 	if role == "public":
 		return access_level == "public"
-	if role == "associate":
-		return _ACCESS_LEVEL_ORDER.get(access_level, 0) <= _ACCESS_LEVEL_ORDER["associate"]
-	if role in {"partner", "admin"}:
-		return access_level in _ACCESS_LEVEL_ORDER
+	if role in {"user", "admin"}:
+		return True
 	return False
 
 
@@ -264,10 +284,8 @@ def get_accessible_corpora(role: str, firm_id: str | None = None) -> list[str]:
 	role_lower = role.lower()
 	if role_lower == "public":
 		return ["public"]
-	if role_lower in {"associate", "partner", "admin"}:
-		if not firm_id:
-			raise ValueError("firm_id is required for firm-aware roles")
-		return ["public", "firm"]
+	if role_lower in {"user", "admin"}:
+		return ["public", "firm"] if firm_id else ["public"]
 	return ["public"]
 
 
@@ -314,22 +332,6 @@ def retrieve_chunks(
 	return _rerank_candidates(cleaned_query, filtered_candidates, top_k=top_k)
 
 
-def retrieve_public_chunks(query: str, index_root: str = DEFAULT_INDEX_ROOT, top_k: int = RERANK_TOP_K) -> list[dict]:
-	"""
-	Convenience wrapper for public-only retrieval.
-
-	Args:
-		query: User query string.
-		index_root: Root directory containing index folders.
-		top_k: Number of reranked results to return.
-
-	Returns:
-		Ranked public chunks.
-	"""
-
-	return retrieve_chunks(query=query, role="public", firm_id=None, index_root=index_root, expand=True, top_k=top_k)
-
-
 def retrieve_bm25_only(
 	query: str,
 	role: str = "public",
@@ -373,26 +375,4 @@ def retrieve_bm25_only(
 	return filtered_candidates[:top_k]
 
 
-def retrieve_firm_chunks(
-	query: str,
-	firm_id: str,
-	role: str = "partner",
-	index_root: str = DEFAULT_INDEX_ROOT,
-	top_k: int = RERANK_TOP_K,
-) -> list[dict]:
-	"""
-	Convenience wrapper for firm-aware retrieval.
-
-	Args:
-		query: User query string.
-		firm_id: Firm identifier whose index may be searched.
-		role: Role used to enforce access-level filtering.
-		index_root: Root directory containing index folders.
-		top_k: Number of reranked results to return.
-
-	Returns:
-		Ranked chunks from the public and matching firm corpora.
-	"""
-
-	return retrieve_chunks(query=query, role=role, firm_id=firm_id, index_root=index_root, expand=True, top_k=top_k)
 
