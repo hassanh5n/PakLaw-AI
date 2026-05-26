@@ -1,6 +1,6 @@
 """
 Module: app
-Purpose: Streamlit UI — 3-tab layout (Public Search, Firm Vault, Combined Search) + sidebar.
+Purpose: Streamlit UI - 3-tab layout (Public Search, Firm Vault, Combined Search) + sidebar.
 Inputs: User interactions via the web interface.
 Outputs: Rendered web application at localhost:8501.
 Dependencies: streamlit, retriever, generator, access_control
@@ -88,6 +88,12 @@ def _initialize_state() -> None:
 		st.session_state.user = None
 	if "last_answer" not in st.session_state:
 		st.session_state.last_answer = ""
+	if "last_public_answer" not in st.session_state:
+		st.session_state.last_public_answer = ""
+	if "last_firm_answer" not in st.session_state:
+		st.session_state.last_firm_answer = ""
+	if "last_combined_answer" not in st.session_state:
+		st.session_state.last_combined_answer = ""
 	if "last_public_results" not in st.session_state:
 		st.session_state.last_public_results = []
 	if "last_firm_results" not in st.session_state:
@@ -120,13 +126,16 @@ def _login_user(username: str, password: str) -> bool:
 def _logout_user() -> None:
 	st.session_state.user = None
 	st.session_state.last_answer = ""
+	st.session_state.last_public_answer = ""
+	st.session_state.last_firm_answer = ""
+	st.session_state.last_combined_answer = ""
 	st.session_state.last_public_results = []
 	st.session_state.last_firm_results = []
 	st.session_state.last_combined_results = []
 	st.session_state.last_active_corpus = PUBLIC_CORPUS_LABEL
 
 
-def _format_result_cards(results: list[dict]) -> None:
+def _format_result_cards(results: list[dict], key_prefix: str) -> None:
 	if not results:
 		st.info("No retrieved chunks to display yet.")
 		return
@@ -152,8 +161,8 @@ def _format_result_cards(results: list[dict]) -> None:
 				# Compute evidence strength for this source using computed relevance_score when available
 				score = float(result.get("relevance_score") or result.get("rerank_score") or result.get("combined_score") or 0.0)
 				if result.get("low_confidence"):
-					badge_label = "Low"
-					badge_color = "#e74c3c"
+					badge_label = "Low confidence"
+					badge_color = "#c0392b"
 				elif score >= 0.75:
 					badge_label = "Strong"
 					badge_color = "#2ecc71"
@@ -162,7 +171,7 @@ def _format_result_cards(results: list[dict]) -> None:
 					badge_color = "#f39c12"
 				else:
 					badge_label = "Weak"
-					badge_color = "#e74c3c"
+					badge_color = "#e67e22"
 				badge_html = f"<div style='background:{badge_color};color:white;padding:6px;border-radius:6px;text-align:center;font-weight:600'>{badge_label}</div>"
 				st.markdown(badge_html, unsafe_allow_html=True)
 
@@ -202,44 +211,52 @@ def _format_result_cards(results: list[dict]) -> None:
 					st.code(json.dumps(meta, indent=2), language="json")
 
 					# Source actions are explicit: user must check to enable download/read
-					show_actions = st.checkbox("Show source actions (download, open)", key=f"show_actions_{index}")
+					show_actions = st.checkbox(
+						"Show source actions (download, open)",
+						key=f"{key_prefix}_show_actions_{index}",
+					)
 					if show_actions:
 						source_doc = result.get("source_doc")
 						firm_id = result.get("firm_id")
 						pdf_path = None
 						if source_doc:
-							public_path = Path("data") / "public" / source_doc
-							if public_path.exists():
-								pdf_path = public_path
-							elif firm_id:
-								firm_path = Path("data") / "firms" / firm_id / source_doc
-								if firm_path.exists():
-									pdf_path = firm_path
+							try:
+								source_name = _safe_pdf_name(str(source_doc))
+							except ValueError:
+								source_name = ""
+
+							if source_name:
+								public_path = Path("data") / "public" / source_name
+								if public_path.exists():
+									pdf_path = public_path
+								elif firm_id:
+									firm_path = Path("data") / "firms" / firm_id / source_name
+									if firm_path.exists():
+										pdf_path = firm_path
 
 						if pdf_path is not None and pdf_path.exists():
 							try:
 								with open(pdf_path, "rb") as f:
 									pdf_bytes = f.read()
-								st.download_button("Download source PDF", pdf_bytes, file_name=source_doc)
+								st.download_button(
+									"Download source PDF",
+									pdf_bytes,
+									file_name=source_name,
+									key=f"{key_prefix}_download_{index}",
+								)
 							except Exception as exc:
 								st.caption(f"Could not open source file for download: {exc}")
 						else:
 							st.caption("No original PDF available for this source.")
 
 
-def _render_answer_block(answer: str) -> None:
+def _render_answer_block(answer: str, chunks: list[dict] | None = None) -> None:
 	st.markdown("### Answer")
 	if answer:
 		st.write(answer)
 
 		# Also show confidence beside the answer and warn if any returned chunk is low-confidence
-		corpus_label = st.session_state.get("last_active_corpus")
-		if corpus_label == PUBLIC_CORPUS_LABEL:
-			chunks = st.session_state.get("last_public_results", [])
-		elif corpus_label == FIRM_CORPUS_LABEL:
-			chunks = st.session_state.get("last_firm_results", [])
-		else:
-			chunks = st.session_state.get("last_combined_results", [])
+		chunks = chunks or []
 
 		# Compute confidence similarly to retrieval summary
 		if chunks:
@@ -264,7 +281,7 @@ def _render_answer_block(answer: str) -> None:
 
 			# Visible warning if any chunk was flagged low-confidence
 			if any(c.get("low_confidence") for c in chunks):
-				st.warning("Some retrieved sources are low-confidence — verify citations before relying on this answer.")
+				st.warning("Some retrieved sources are low-confidence - verify citations before relying on this answer.")
 
 		# Show compact professional citations (top unique documents)
 		if chunks:
@@ -277,7 +294,7 @@ def _render_answer_block(answer: str) -> None:
 				seen.add(src)
 				section = c.get("section_hint") or ""
 				firm = c.get("firm_id") or "public"
-				citations.append(f"{src} — {section} ({firm})" if section else f"{src} ({firm})")
+				citations.append(f"{src} - {section} ({firm})" if section else f"{src} ({firm})")
 
 			if citations:
 				st.markdown("**Cited sources:**")
@@ -316,7 +333,7 @@ def _render_retrieval_summary(results: list[dict]) -> None:
 
 	left, right = st.columns([3, 1])
 	with left:
-		st.markdown(f"**Retrieved:** {count} chunk(s) — **{strength}**")
+		st.markdown(f"**Retrieved:** {count} chunk(s) - **{strength}**")
 	with right:
 		st.metric("Confidence", f"{confidence_pct}%")
 		st.progress(confidence_pct)
@@ -370,10 +387,18 @@ def _list_firm_documents(firm_id: str, data_root: str = "data") -> list[dict]:
 	return documents
 
 
+def _safe_pdf_name(filename: str) -> str:
+	safe_name = Path(str(filename).replace("\\", "/")).name.strip()
+	if not safe_name or safe_name in {".", ".."} or not safe_name.lower().endswith(".pdf"):
+		raise ValueError("Invalid PDF filename.")
+	return safe_name
+
+
 def _save_uploaded_pdf(uploaded_file, firm_id: str) -> Path:
 	dest_dir = Path("data") / "firms" / firm_id
 	dest_dir.mkdir(parents=True, exist_ok=True)
-	dest_path = dest_dir / uploaded_file.name
+	safe_name = _safe_pdf_name(uploaded_file.name)
+	dest_path = dest_dir / safe_name
 	with open(dest_path, "wb") as handle:
 		handle.write(uploaded_file.getbuffer())
 	return dest_path
@@ -397,13 +422,14 @@ def _handle_public_search() -> None:
 				role="public",
 			)
 			st.session_state.last_public_results = results
-			st.session_state.last_answer = _generate_answer_safe(query, results)
+			st.session_state.last_public_answer = _generate_answer_safe(query, results)
+			st.session_state.last_answer = st.session_state.last_public_answer
 			st.session_state.last_active_corpus = PUBLIC_CORPUS_LABEL
 
-	_render_answer_block(st.session_state.last_answer)
+	_render_answer_block(st.session_state.last_public_answer, st.session_state.last_public_results)
 	st.markdown("### Retrieved Public Sources")
 	_render_retrieval_summary(st.session_state.last_public_results)
-	_format_result_cards(st.session_state.last_public_results)
+	_format_result_cards(st.session_state.last_public_results, "public")
 
 
 def _handle_firm_login_panel() -> None:
@@ -447,9 +473,13 @@ def _handle_firm_uploads(user: dict) -> None:
 		with st.spinner("Saving and ingesting firm document..."):
 			from ingest_private import ingest_firm_pdf
 
-			pdf_path = _save_uploaded_pdf(uploaded_file, firm_id)
+			try:
+				pdf_path = _save_uploaded_pdf(uploaded_file, firm_id)
+			except ValueError as exc:
+				st.error(str(exc))
+				return
 			ingest_firm_pdf(str(pdf_path), firm_id=firm_id, access_level="firm")
-			st.success(f"Ingested {uploaded_file.name} into firm index {firm_id}.")
+			st.success(f"Ingested {pdf_path.name} into firm index {firm_id}.")
 			st.rerun()
 
 
@@ -463,7 +493,10 @@ def _handle_firm_search(user: dict) -> None:
 
 	default_firm = st.session_state.pop("pending_firm_query", st.session_state.get("firm_query", ""))
 	query = st.text_input("Search firm vault", key="firm_query", value=default_firm, placeholder="Ask about your firm documents")
-	if st.button("Search Firm Vault", key="firm_search_button"):
+	search_disabled = not _RETRIEVAL_BACKEND_READY
+	if search_disabled:
+		st.info(_retrieval_backend_status_message())
+	if st.button("Search Firm Vault", key="firm_search_button", disabled=search_disabled):
 		if not query.strip():
 			st.warning("Enter a question to search the firm vault.")
 			return
@@ -474,15 +507,17 @@ def _handle_firm_search(user: dict) -> None:
 				"Firm indexes are missing for this firm. Ingest at least one PDF first",
 				firm_id=firm_id,
 				role=role,
+				corpora=["firm"],
 			)
 			st.session_state.last_firm_results = results
-			st.session_state.last_answer = _generate_answer_safe(query, results)
+			st.session_state.last_firm_answer = _generate_answer_safe(query, results)
+			st.session_state.last_answer = st.session_state.last_firm_answer
 			st.session_state.last_active_corpus = FIRM_CORPUS_LABEL
 
-	_render_answer_block(st.session_state.last_answer)
+	_render_answer_block(st.session_state.last_firm_answer, st.session_state.last_firm_results)
 	st.markdown("### Retrieved Firm Sources")
 	_render_retrieval_summary(st.session_state.last_firm_results)
-	_format_result_cards(st.session_state.last_firm_results)
+	_format_result_cards(st.session_state.last_firm_results, "firm")
 	st.markdown("### Firm Library")
 	for document in _list_firm_documents(firm_id):
 		st.caption(f"{document['name']} | uploaded {document['uploaded']} | {document['size_kb']} KB")
@@ -518,10 +553,11 @@ def _handle_combined_search(user: dict) -> None:
 				firm_id=firm_id,
 			)
 			st.session_state.last_combined_results = results
-			st.session_state.last_answer = _generate_answer_safe(query, results)
+			st.session_state.last_combined_answer = _generate_answer_safe(query, results)
+			st.session_state.last_answer = st.session_state.last_combined_answer
 			st.session_state.last_active_corpus = COMBINED_CORPUS_LABEL
 
-	_render_answer_block(st.session_state.last_answer)
+	_render_answer_block(st.session_state.last_combined_answer, st.session_state.last_combined_results)
 
 	public_results = [result for result in st.session_state.last_combined_results if result.get("corpus") == "public"]
 	firm_results = [result for result in st.session_state.last_combined_results if result.get("corpus") == "firm"]
@@ -530,11 +566,11 @@ def _handle_combined_search(user: dict) -> None:
 	with left:
 		st.markdown("#### Public Law Sources")
 		_render_retrieval_summary(public_results)
-		_format_result_cards(public_results)
+		_format_result_cards(public_results, "combined_public")
 	with right:
 		st.markdown("#### Firm Document Sources")
 		_render_retrieval_summary(firm_results)
-		_format_result_cards(firm_results)
+		_format_result_cards(firm_results, "combined_firm")
 
 
 def _render_sidebar() -> None:
@@ -569,7 +605,8 @@ def main() -> None:
 	_initialize_state()
 	_ensure_retrieval_warmup_started()
 	_render_retrieval_status()
-	ensure_default_users(DEFAULT_DB_PATH)
+	if os.getenv("PAKLAW_SEED_DEMO_USERS", "false").lower() == "true":
+		ensure_default_users(DEFAULT_DB_PATH)
 	_render_sidebar()
 
 	st.title(APP_TITLE)

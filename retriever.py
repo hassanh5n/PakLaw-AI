@@ -511,6 +511,30 @@ def get_accessible_corpora(role: str, firm_id: str | None = None) -> list[str]:
 	return ["public"]
 
 
+def _resolve_corpora(
+	role: str,
+	firm_id: str | None,
+	corpora: list[str] | tuple[str, ...] | None,
+) -> list[str]:
+	accessible_corpora = get_accessible_corpora(role, firm_id)
+	if corpora is None:
+		return accessible_corpora
+
+	resolved: list[str] = []
+	for corpus in corpora:
+		normalized = str(corpus).strip().lower()
+		if normalized not in {"public", "firm"}:
+			raise ValueError(f"Unsupported corpus: {corpus}")
+		if normalized not in accessible_corpora:
+			raise ValueError(f"{normalized} corpus is not accessible for this user")
+		if normalized not in resolved:
+			resolved.append(normalized)
+
+	if not resolved:
+		raise ValueError("At least one corpus must be selected")
+	return resolved
+
+
 def retrieve_chunks(
 	query: str,
 	role: str = "public",
@@ -518,6 +542,7 @@ def retrieve_chunks(
 	index_root: str = DEFAULT_INDEX_ROOT,
 	expand: bool = True,
 	top_k: int = RERANK_TOP_K,
+	corpora: list[str] | tuple[str, ...] | None = None,
 ) -> list[dict]:
 	"""
 	Run the full hybrid retrieval pipeline for a query.
@@ -529,6 +554,7 @@ def retrieve_chunks(
 		index_root: Root directory containing index folders.
 		expand: Whether to run query expansion before searching.
 		top_k: Number of reranked results to return.
+		corpora: Optional explicit corpus selection, such as ["firm"] for firm-only search.
 
 	Returns:
 		Ranked chunk dictionaries with retrieval metadata.
@@ -542,7 +568,7 @@ def retrieve_chunks(
 	if not query_variants:
 		query_variants = [cleaned_query]
 
-	accessible_corpora = get_accessible_corpora(role, firm_id)
+	accessible_corpora = _resolve_corpora(role, firm_id, corpora)
 	all_candidates: list[dict] = []
 
 	for corpus in accessible_corpora:
@@ -595,6 +621,7 @@ def retrieve_bm25_only(
 	index_root: str = DEFAULT_INDEX_ROOT,
 	expand: bool = True,
 	top_k: int = RERANK_TOP_K,
+	corpora: list[str] | tuple[str, ...] | None = None,
 ) -> list[dict]:
 	"""
 	Run the BM25-only baseline without FAISS or reranking.
@@ -606,6 +633,7 @@ def retrieve_bm25_only(
 		index_root: Root directory containing index folders.
 		expand: Whether to run query expansion before searching.
 		top_k: Number of results to return.
+		corpora: Optional explicit corpus selection, such as ["firm"] for firm-only search.
 
 	Returns:
 		BM25-ranked chunk dictionaries with retrieval metadata.
@@ -619,7 +647,7 @@ def retrieve_bm25_only(
 	if not query_variants:
 		query_variants = [cleaned_query]
 
-	accessible_corpora = get_accessible_corpora(role, firm_id)
+	accessible_corpora = _resolve_corpora(role, firm_id, corpora)
 	all_candidates: list[dict] = []
 
 	for corpus in accessible_corpora:
