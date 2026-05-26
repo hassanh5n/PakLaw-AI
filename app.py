@@ -453,34 +453,55 @@ def _handle_firm_login_panel() -> None:
 
 
 def _handle_firm_uploads(user: dict) -> None:
-	role = user["role"]
-	firm_id = user.get("firm_id")
-	can_upload = role == "admin" and bool(firm_id)
+    role = user["role"]
+    firm_id = user.get("firm_id")
+    can_upload = role in {"firm_admin", "admin"} and bool(firm_id)
 
-	st.markdown("### Upload PDF")
-	if not can_upload:
-		st.caption("Upload is available for admin users with a firm id.")
-		return
+    st.markdown("### Upload Documents")
+    if not can_upload:
+        st.caption("Upload is available for firm admin users only.")
+        return
 
-	uploaded_file = st.file_uploader("Upload a firm PDF", type=["pdf"], key="firm_pdf_uploader")
-	if st.button("Ingest Uploaded PDF", key="ingest_firm_pdf_button"):
-		if uploaded_file is None:
-			st.warning("Choose a PDF before ingesting.")
-			return
-		if not firm_id:
-			st.error("Firm id is required for uploads.")
-			return
-		with st.spinner("Saving and ingesting firm document..."):
-			from ingest_private import ingest_firm_pdf
+    # Multi-file uploader — returns a list
+    uploaded_files = st.file_uploader(
+        "Upload firm PDFs (select multiple)",
+        type=["pdf"],
+        accept_multiple_files=True,   # <-- key change
+        key="firm_pdf_uploader",
+    )
 
-			try:
-				pdf_path = _save_uploaded_pdf(uploaded_file, firm_id)
-			except ValueError as exc:
-				st.error(str(exc))
-				return
-			ingest_firm_pdf(str(pdf_path), firm_id=firm_id, access_level="firm")
-			st.success(f"Ingested {pdf_path.name} into firm index {firm_id}.")
-			st.rerun()
+    if uploaded_files:
+        st.caption(f"{len(uploaded_files)} file(s) selected: {', '.join(f.name for f in uploaded_files)}")
+
+    if st.button("Ingest All Uploaded PDFs", key="ingest_firm_pdf_button"):
+        if not uploaded_files:
+            st.warning("Select at least one PDF before ingesting.")
+            return
+
+        saved_paths = []
+        errors = []
+
+        # Save all files first
+        for uploaded_file in uploaded_files:
+            try:
+                pdf_path = _save_uploaded_pdf(uploaded_file, firm_id)
+                saved_paths.append(str(pdf_path))
+            except ValueError as exc:
+                errors.append(f"{uploaded_file.name}: {exc}")
+
+        if errors:
+            for error in errors:
+                st.error(error)
+
+        if saved_paths:
+            with st.spinner(f"Ingesting {len(saved_paths)} document(s)..."):
+                from ingest_private import ingest_firm_pdfs_batch  # updated function
+                try:
+                    ingest_firm_pdfs_batch(saved_paths, firm_id=firm_id, access_level="firm")
+                    st.success(f"Ingested {len(saved_paths)} document(s) into firm index.")
+                    st.rerun()
+                except ValueError as exc:
+                    st.error(str(exc))
 
 
 def _handle_firm_search(user: dict) -> None:

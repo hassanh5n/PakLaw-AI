@@ -67,3 +67,58 @@ def ingest_firm_pdf(
     build_bm25_index(chunks_pkl_path, output_dir, index_name)
 
     print(f"Firm index updated → {output_dir}/")
+
+
+def ingest_firm_pdfs_batch(
+    pdf_paths: list[str],
+    firm_id: str,
+    access_level: str = "firm",
+) -> None:
+    import pickle
+
+    output_dir = os.path.join("indexes", "firms", firm_id)
+    index_name = f"firm_{firm_id}"
+    chunks_pkl_path = os.path.join(output_dir, f"{index_name}_chunks.pkl")
+
+    # Load existing chunks if index already exists
+    if os.path.exists(chunks_pkl_path):
+        with open(chunks_pkl_path, "rb") as f:
+            all_chunks = pickle.load(f)
+        print(f"Loaded {len(all_chunks)} existing chunks")
+    else:
+        all_chunks = []
+
+    # Process each PDF and accumulate chunks — index built only once after
+    for pdf_path in pdf_paths:
+        filename = os.path.basename(pdf_path)
+
+        if not is_text_extractable(pdf_path):
+            print(f"[SKIP] {filename} — scanned PDF, skipping")
+            continue
+
+        pages = extract_text_from_pdf(pdf_path)
+        full_text = "\n\n".join(clean_text(text) for _, text in pages)
+        chunks = chunk_text(full_text)
+
+        if not chunks:
+            print(f"[WARN] {filename} — 0 chunks produced")
+            continue
+
+        new_chunks = tag_chunks(
+            chunk_texts=chunks,
+            source_doc=filename,
+            firm_id=firm_id,
+            access_level=access_level,
+        )
+        all_chunks.extend(new_chunks)
+        print(f"[OK] {filename} → {len(new_chunks)} chunks")
+
+    if not all_chunks:
+        raise ValueError("No chunks produced from any of the uploaded PDFs.")
+
+    print(f"Total chunks after batch: {len(all_chunks)}")
+
+    # Single index rebuild for all documents combined
+    build_faiss_index(all_chunks, output_dir, index_name)
+    build_bm25_index(chunks_pkl_path, output_dir, index_name)
+    print(f"Firm index rebuilt → {output_dir}/")

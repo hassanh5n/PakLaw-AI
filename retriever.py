@@ -432,63 +432,50 @@ def _rerank_candidates(query: str, candidates: list[dict], top_k: int = RERANK_T
 
 
 def _filter_by_relevance(ranked: list[dict]) -> list[dict]:
-	"""Filter reranked candidates by configured relevance thresholds.
+    if not ranked:
+        return []
 
-	This prevents returning low-confidence public documents for queries
-	that the reranker judges as unrelated.
-	"""
-	if not ranked:
-		return []
+    rerank_scores = [float(r.get("rerank_score") or 0.0) for r in ranked]
+    faiss_scores = [float(r.get("faiss_score") or 0.0) for r in ranked]
+    bm25_scores = [float(r.get("bm25_score") or 0.0) for r in ranked]
 
-	# Gather raw signals
-	rerank_scores = [float(r.get("rerank_score") or 0.0) for r in ranked]
-	faiss_scores = [float(r.get("faiss_score") or 0.0) for r in ranked]
-	bm25_scores = [float(r.get("bm25_score") or 0.0) for r in ranked]
+    def _normalize(values: list[float]) -> list[float]:
+        mx = max(values) if values else 0.0
+        mn = min(values) if values else 0.0
+        span = mx - mn if mx - mn > 1e-9 else 1.0
+        return [(v - mn) / span for v in values]
 
-	# Normalize each signal to 0..1 across the ranked list to make them comparable.
-	def _normalize(values: list[float]) -> list[float]:
-		mx = max(values) if values else 0.0
-		mn = min(values) if values else 0.0
-		span = mx - mn if mx - mn > 1e-9 else 1.0
-		return [(v - mn) / span for v in values]
+    norm_rerank = _normalize(rerank_scores)
+    norm_faiss = _normalize(faiss_scores)
+    norm_bm25 = _normalize(bm25_scores)
 
-	norm_rerank = _normalize(rerank_scores)
-	norm_faiss = _normalize(faiss_scores)
-	norm_bm25 = _normalize(bm25_scores)
+    filtered: list[dict] = []
+    for i, rec in enumerate(ranked):
+        rel = (
+            REL_WEIGHT_RERANK * norm_rerank[i]
+            + REL_WEIGHT_FAISS * norm_faiss[i]
+            + REL_WEIGHT_BM25 * norm_bm25[i]
+        )
 
-	filtered: list[dict] = []
-	for i, rec in enumerate(ranked):
-		# Compose a relevance score
-		rel = (
-			REL_WEIGHT_RERANK * norm_rerank[i]
-			+ REL_WEIGHT_FAISS * norm_faiss[i]
-			+ REL_WEIGHT_BM25 * norm_bm25[i]
-		)
+        rec = dict(rec)
+        rec["relevance_score"] = float(max(0.0, min(rel, 1.0)))
 
-		# Attach the computed relevance for UI and downstream logic
-		rec = dict(rec)
-		rec["relevance_score"] = float(max(0.0, min(rel, 1.0)))
+        if rec.get("corpus") == "public":
+            cutoff = PUBLIC_MIN_RERANK_SCORE * 0.9  # 0.225
+        else:
+            cutoff = MIN_RERANK_SCORE * 0.9          # 0.09
 
-		# Determine whether to accept, mark low-confidence, or drop
-		if rec.get("corpus") == "public":
-			# require slightly higher relevance to show public sources
-			cutoff = PUBLIC_MIN_RERANK_SCORE * 0.9
-		else:
-			cutoff = MIN_RERANK_SCORE * 0.9
+        # NOW cutoff is actually used
+        if rec["relevance_score"] < cutoff:
+            continue
 
-		# Drop truly irrelevant results
-		if rec["relevance_score"] < IRRELEVANCE_CUTOFF:
-			continue
+        if rec["relevance_score"] < LOW_CONF_CUTOFF:
+            rec["low_confidence"] = True
 
-		# Mark low confidence if below threshold
-		if rec["relevance_score"] < LOW_CONF_CUTOFF:
-			rec["low_confidence"] = True
+        filtered.append(rec)
 
-		filtered.append(rec)
-
-	# Sort by the computed relevance_score descending
-	filtered.sort(key=lambda r: r.get("relevance_score", 0.0), reverse=True)
-	return filtered
+    filtered.sort(key=lambda r: r.get("relevance_score", 0.0), reverse=True)
+    return filtered
 
 
 def get_accessible_corpora(role: str, firm_id: str | None = None) -> list[str]:
