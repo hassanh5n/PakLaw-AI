@@ -27,6 +27,13 @@ export function login(username, password) {
   });
 }
 
+export function signup(username, password, firmId) {
+  return apiFetch("/auth/signup", {
+    method: "POST",
+    body: JSON.stringify({ username, password, firm_id: firmId })
+  });
+}
+
 export function logout() {
   return apiFetch("/auth/logout", { method: "POST" });
 }
