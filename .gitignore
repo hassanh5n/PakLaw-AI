@@ -8,7 +8,7 @@ env/
 
 # Data & indexes (large binary files — don't commit)
 data/firms/
-indexes/
+indexes/firms
 
 # Streamlit cache
 .streamlit/
@@ -50,5 +50,4 @@ temp/
 
 # backend nested data (same rules as root data/)
 backend/data/firms/
-backend/data/users.sqlite3
 backend/indexes/

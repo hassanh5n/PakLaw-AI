@@ -1,10 +1,11 @@
 const styles = {
   high: "confidence high",
   medium: "confidence medium",
-  low: "confidence low"
+  low: "confidence low",
 };
 
 export default function ConfidenceBadge({ value = "low" }) {
-  return <span className={styles[value] || styles.low}>{value} confidence</span>;
+  return (
+    <span className={styles[value] || styles.low}>{value} confidence</span>
+  );
 }
-

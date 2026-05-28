@@ -17,7 +17,10 @@ export default function LoginPanel({ user, onUser }) {
     setBusy(true);
     setError("");
     try {
-      const data = mode === "signup" ? await signup(username, password, firmId) : await login(username, password);
+      const data =
+        mode === "signup"
+          ? await signup(username, password, firmId)
+          : await login(username, password);
       onUser(data.user);
     } catch (err) {
       setError(err.message);
@@ -33,15 +36,22 @@ export default function LoginPanel({ user, onUser }) {
 
   if (user) {
     return (
-      <div className="login-panel compact">
+      <div className="login-panel liquid-glass compact">
         <div className="user-chip">
           <Shield size={18} />
           <span>
             <strong>{user.username}</strong>
-            <small>{user.role} / {user.firm_id || "public"}</small>
+            <small>
+              {user.role} / {user.firm_id || "public"}
+            </small>
           </span>
         </div>
-        <button className="icon-button" type="button" onClick={signOut} aria-label="Sign out">
+        <button
+          className="icon-button"
+          type="button"
+          onClick={signOut}
+          aria-label="Sign out"
+        >
           <LogOut size={18} />
         </button>
       </div>
@@ -49,35 +59,57 @@ export default function LoginPanel({ user, onUser }) {
   }
 
   return (
-    <form className="login-panel" onSubmit={submit}>
+    <form className="login-panel liquid-glass" onSubmit={submit}>
       <div className="auth-switch" role="tablist" aria-label="Firm access mode">
-        <button className={mode === "login" ? "active" : ""} type="button" onClick={() => setMode("login")}>
+        <button
+          className={mode === "login" ? "active" : ""}
+          type="button"
+          onClick={() => setMode("login")}
+        >
           Login
         </button>
-        <button className={mode === "signup" ? "active" : ""} type="button" onClick={() => setMode("signup")}>
+        <button
+          className={mode === "signup" ? "active" : ""}
+          type="button"
+          onClick={() => setMode("signup")}
+        >
           Sign up
         </button>
       </div>
 
       <label>
         <span>Username</span>
-        <input value={username} onChange={(event) => setUsername(event.target.value)} />
+        <input
+          value={username}
+          onChange={(event) => setUsername(event.target.value)}
+        />
       </label>
       <label>
         <span>Password</span>
-        <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
+        <input
+          type="password"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+        />
       </label>
       {mode === "signup" && (
         <label>
           <span>Firm ID</span>
-          <input value={firmId} onChange={(event) => setFirmId(event.target.value)} />
+          <input
+            value={firmId}
+            onChange={(event) => setFirmId(event.target.value)}
+          />
         </label>
       )}
 
       {error && <p className="form-error">{error}</p>}
       <button className="primary-button" disabled={busy} type="submit">
         {mode === "signup" ? <UserPlus size={18} /> : <LogIn size={18} />}
-        {busy ? "Working" : mode === "signup" ? "Create firm access" : "Enter firm vault"}
+        {busy
+          ? "Working..."
+          : mode === "signup"
+            ? "Create firm access"
+            : "Enter firm vault"}
       </button>
     </form>
   );

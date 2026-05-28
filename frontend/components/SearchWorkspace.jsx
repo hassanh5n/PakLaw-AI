@@ -1,6 +1,7 @@
 "use client";
 
 import { Building2, Globe2, Layers3, SendHorizontal } from "lucide-react";
+import { motion } from "framer-motion";
 import { useMemo, useState } from "react";
 import { runSearch } from "../lib/api";
 import AnswerBlock from "./AnswerBlock";
@@ -8,12 +9,14 @@ import AnswerBlock from "./AnswerBlock";
 const tabs = [
   { id: "public", label: "Public Law", icon: Globe2 },
   { id: "firm", label: "Firm Vault", icon: Building2 },
-  { id: "combined", label: "Combined", icon: Layers3 }
+  { id: "combined", label: "Combined", icon: Layers3 },
 ];
 
 export default function SearchWorkspace({ user, intent = "public" }) {
   const [mode, setMode] = useState(intent === "firm" ? "combined" : "public");
-  const [query, setQuery] = useState("What does Pakistani law say about a family settlement dispute?");
+  const [query, setQuery] = useState(
+    "What does Pakistani law say about a family settlement dispute?"
+  );
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -27,7 +30,9 @@ export default function SearchWorkspace({ user, intent = "public" }) {
 
   async function submit(event) {
     event.preventDefault();
-    const resolvedMode = availableTabs.some((tab) => tab.id === mode) ? mode : availableTabs[0]?.id || "public";
+    const resolvedMode = availableTabs.some((tab) => tab.id === mode)
+      ? mode
+      : availableTabs[0]?.id || "public";
     setBusy(true);
     setError("");
     try {
@@ -35,7 +40,7 @@ export default function SearchWorkspace({ user, intent = "public" }) {
         query,
         top_k: 8,
         expand: true,
-        include_answer: true
+        include_answer: true,
       });
       setResult(data);
     } catch (err) {
@@ -46,16 +51,29 @@ export default function SearchWorkspace({ user, intent = "public" }) {
   }
 
   return (
-    <main className="workspace">
+    <motion.main
+      className="workspace liquid-glass-strong"
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.6, delay: 0.1, ease: "easeOut" }}
+    >
       <div className="workspace-heading">
-        <span>{intent === "firm" ? "Firm intelligence" : "Public legal oracle"}</span>
-        <h2>{intent === "firm" ? "Search your vault or blend it with public law." : "Ask the law. Get cited answers."}</h2>
+        <span>
+          {intent === "firm" ? "Firm intelligence" : "Public legal oracle"}
+        </span>
+        <h2>
+          {intent === "firm"
+            ? "Search your vault or blend it with public law."
+            : "Ask the law. Get cited answers."}
+        </h2>
       </div>
 
       <div className="tab-bar">
         {availableTabs.map((tab) => {
           const Icon = tab.icon;
-          const activeMode = availableTabs.some((item) => item.id === mode) ? mode : availableTabs[0].id;
+          const activeMode = availableTabs.some((item) => item.id === mode)
+            ? mode
+            : availableTabs[0].id;
           return (
             <button
               className={activeMode === tab.id ? "tab active" : "tab"}
@@ -77,14 +95,19 @@ export default function SearchWorkspace({ user, intent = "public" }) {
           onChange={(event) => setQuery(event.target.value)}
           placeholder="Type your legal question..."
         />
-        <button className="send-button" disabled={busy || query.trim().length < 2} type="submit" aria-label="Search">
+        <button
+          className="send-button"
+          disabled={busy || query.trim().length < 2}
+          type="submit"
+          aria-label="Search"
+        >
           <SendHorizontal size={20} />
         </button>
       </form>
 
       {error && <p className="form-error">{error}</p>}
       {busy ? <SkeletonResults /> : <AnswerBlock result={result} />}
-    </main>
+    </motion.main>
   );
 }
 

@@ -8,6 +8,8 @@ from dotenv import load_dotenv
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
+load_dotenv(ROOT_DIR / ".env")
+
 CORE_DIR = ROOT_DIR / "core"
 INDEX_ROOT = Path(os.getenv("PAKLAW_INDEX_ROOT", ROOT_DIR / "indexes")).resolve()
 DATA_ROOT = Path(os.getenv("PAKLAW_DATA_ROOT", ROOT_DIR / "data")).resolve()
@@ -31,4 +33,3 @@ FRONTEND_ORIGINS = [
 if str(CORE_DIR) not in sys.path:
     sys.path.insert(0, str(CORE_DIR))
 
-load_dotenv(ROOT_DIR / ".env")
