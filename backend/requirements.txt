@@ -12,9 +12,9 @@ langchain
 langchain-community
 langchain-text-splitters
 sentence-transformers==3.0.1
-faiss-cpu==1.13.1
-numpy==2.3.5
-torch==2.6.0
+faiss-cpu
+numpy
+torch==2.9.0
 rank-bm25
 groq
 tqdm
